@@ -38,7 +38,11 @@ Roughly, `overlay` of a 2-sensors trackball should look like below.
 //** To unify a mixture from various input devices,
 //   wait and slap all axises as one event sync per 1ms interval.
 //   might need to bump up to 12-16ms on wireless peripheral.
-// &zip_mixer { sync_report_ms = <1>; };
+// &zip_mixer {
+//   sync-report-ms = <1>;
+//   sync-report-yaw-ms = <15>; 
+//   yaw-div = <62>;
+// };
 
 /{
 

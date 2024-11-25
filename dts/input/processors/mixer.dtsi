@@ -5,6 +5,8 @@
     /omit-if-no-ref/ zip_mixer: zip_mixer {
         compatible = "zmk,input-processor-mixer";
         #input-processor-cells = <1>;
-        sync_report_ms = <1>;
+        sync-report-ms = <1>;
+        sync-report-yaw-ms = <15>;
+        yaw-div = <62>;
     };
 };
