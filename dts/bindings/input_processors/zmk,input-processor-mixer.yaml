@@ -1,0 +1,14 @@
+# Copyright (c) 2024, The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: Input Processor for mixing values after input events
+
+compatible: "zmk,input-processor-mixer"
+
+include: ip_one_param.yaml
+
+properties:
+  sync_report_ms:
+    type: int
+    required: true
+    default: 1

@@ -1,0 +1,10 @@
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+    /omit-if-no-ref/ zip_mixer: zip_mixer {
+        compatible = "zmk,input-processor-mixer";
+        #input-processor-cells = <1>;
+        sync_report_ms = <1>;
+    };
+};
