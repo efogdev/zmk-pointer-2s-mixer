@@ -1,6 +1,6 @@
 # Input Processor Mixer
 
-This module interrupts and mixes incoming input events from Zephye input subsystem for ZMK.
+This module interrupt, combine, sync incoming input events from Zephyr input subsystem for ZMK.
 
 ## What it does
 
