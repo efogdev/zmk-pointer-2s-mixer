@@ -42,7 +42,7 @@ Roughly, `overlay` of a 2-sensors trackball should look like below.
 
 /{
 
-  //** routing trackball x-asix sensor `pd0` to `&zip_mixer`
+  //** routing x-axis sensor `pd0` to `&zip_mixer`
   tball1_pri_mmv_il {
     compatible = "zmk,input-listener";
     device = <&pd0>;
@@ -55,7 +55,7 @@ Roughly, `overlay` of a 2-sensors trackball should look like below.
     };
   };
 
-  //** routing trackball y-asix sensor `pd0` to `&zip_mixer`
+  //** routing y-axis sensor `pd0` to `&zip_mixer`
   tball1_sec_mmv_il {
     compatible = "zmk,input-listener";
     device = <&pd0a>;
