@@ -19,4 +19,4 @@ properties:
   yaw-div:
     type: int
     required: true
-    default: 53
+    default: 25
