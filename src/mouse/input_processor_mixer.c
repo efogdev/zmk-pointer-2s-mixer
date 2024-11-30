@@ -50,7 +50,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
     // accumulate twisting distance from 2 sensors,
     if (param1 & INPUT_MIXER_X_ONLY && event->code == INPUT_REL_Y) {
-        data->yaw1 += -event->value;
+        data->yaw1 += event->value;
     }
     if (param1 & INPUT_MIXER_Y_ONLY && event->code == INPUT_REL_X) {
         data->yaw2 += event->value;
