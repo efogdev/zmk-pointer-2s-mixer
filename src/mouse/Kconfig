@@ -1,7 +1,7 @@
 # Copyright (c) 2023 The ZMK Contributors
 # SPDX-License-Identifier: MIT
 
-if ZMK_MOUSE
+if ZMK_POINTING
 
 config ZMK_INPUT_PROCESSOR_MIXER
     bool "Event Mixer Input Processor"
