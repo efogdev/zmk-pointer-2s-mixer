@@ -5,4 +5,4 @@
 # SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
 #
 
-rsource "src/mouse/Kconfig"
+rsource "src/pointing/Kconfig"
