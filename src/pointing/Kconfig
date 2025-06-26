@@ -3,9 +3,8 @@
 
 if ZMK_POINTING
 
-config ZMK_INPUT_PROCESSOR_MIXER
-    bool "Event Mixer Input Processor"
+config ZMK_POINTER_2S_MIXER
+    bool "2 sensor mixer for pointing devices"
     default y
-    depends on DT_HAS_ZMK_INPUT_PROCESSOR_MIXER_ENABLED
 
 endif

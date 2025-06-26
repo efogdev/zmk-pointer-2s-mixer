@@ -1,12 +1,14 @@
-
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 
 / {
-    /omit-if-no-ref/ zip_mixer: zip_mixer {
-        compatible = "zmk,input-processor-mixer";
+    /omit-if-no-ref/ zip_2s_mixer: zip_2s_mixer {
+        compatible = "zmk,pointer-2s-mixer";
         #input-processor-cells = <1>;
-        sync-report-ms = <1>;
-        sync-report-yaw-ms = <15>;
-        yaw-div = <62>;
+        sync-report-ms = <2>;
+        sync-report-yaw-ms = <8>;
+        yaw-div = <48>;
+        sensor1-pos = [00 80 00];
+        sensor2-pos = [ff 80 00];
+        ball-radius = <127>;
     };
 };
