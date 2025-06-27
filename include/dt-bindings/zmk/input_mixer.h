@@ -1,3 +1,4 @@
+#pragma once
 #include <zephyr/dt-bindings/dt-util.h>
 
 #define INPUT_MIXER_SENSOR1 BIT(0)

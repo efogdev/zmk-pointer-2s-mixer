@@ -4,7 +4,7 @@
     /omit-if-no-ref/ zip_2s_mixer: zip_2s_mixer {
         compatible = "zmk,pointer-2s-mixer";
         #input-processor-cells = <1>;
-        sync-report-ms = <2>;
+        sync-report-ms = <4>;
         sync-report-yaw-ms = <8>;
         yaw-div = <48>;
         sensor1-pos = [00 80 00];
