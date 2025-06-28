@@ -100,6 +100,11 @@ See the complete example in `efogtech_trackball_0.dts` board, it features:
 - Proper mixer configuration with ball radius of 107 units
 - Sensor positions at [00 6F 00] and [ff 56 00]
 
+![Screenshot From 2025-06-28 18-02-20](https://github.com/user-attachments/assets/5413240c-485c-46e5-8a8b-307fdae793ed)
+
+![Screenshot From 2025-06-28 18-02-48](https://github.com/user-attachments/assets/237f5441-d16a-464c-acfd-f3458e24ed01)
+
+
 ## Kconfig Options
 
 Enable the module in your configuration:
