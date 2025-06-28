@@ -22,6 +22,12 @@ struct zip_pointer_2s_mixer_config {
     uint8_t sensor2_pos[3];
 };
 
+#define LATENCY_BUFFER_SIZE 100
+struct latency_event {
+    int64_t timestamp;
+    bool is_sensor1;
+};
+
 // zero = ball origin
 struct zip_pointer_2s_mixer_data {
     const struct device *dev;
@@ -105,20 +111,19 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             if (have_y) {
                 input_report(dev, INPUT_EV_REL, INPUT_REL_Y, data->rpt_y, true, K_NO_WAIT);
             }
-
             data->rpt_x = data->rpt_y = 0;
         }
     }
 
-    if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
-        const int16_t yaw = data->rpt_yaw / config->yaw_div;
-
-        if (yaw) {
-            data->last_rpt_time_yaw = now;
-            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
-            data->rpt_yaw = 0;
-        }
-    }
+    // if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
+    //     const int16_t yaw = data->rpt_yaw / config->yaw_div;
+    //
+    //     if (yaw) {
+    //         data->last_rpt_time_yaw = now;
+    //         input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
+    //         data->rpt_yaw = 0;
+    //     }
+    // }
 
     return 0;
 }
@@ -228,7 +233,6 @@ static void calculate_tangent_basis(const float px, const float py, const float 
 
 static void map_accumulated_movements_to_reference(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const struct zip_pointer_2s_mixer_config *config = dev->config;
 
     if (data->sensor1_acc_x == 0 && data->sensor1_acc_y == 0 &&
         data->sensor2_acc_x == 0 && data->sensor2_acc_y == 0) {
@@ -237,10 +241,6 @@ static void map_accumulated_movements_to_reference(const struct device *dev) {
 
     float total_movement_x = data->rpt_x_remainder;
     float total_movement_y = data->rpt_y_remainder;
-    float total_yaw = 0;
-
-    const float sensor1_vec[3] = {data->sensor1_surface_x, data->sensor1_surface_y, data->sensor1_surface_z};
-    const float sensor2_vec[3] = {data->sensor2_surface_x, data->sensor2_surface_y, data->sensor2_surface_z};
 
     if (data->sensor1_acc_x != 0 || data->sensor1_acc_y != 0) {
         float movement_vector[3];
@@ -248,8 +248,6 @@ static void map_accumulated_movements_to_reference(const struct device *dev) {
         movement_vector[1] = data->sensor1_acc_x * data->sensor1_basis_x[1] + data->sensor1_acc_y * data->sensor1_basis_y[1];
         movement_vector[2] = data->sensor1_acc_x * data->sensor1_basis_x[2] + data->sensor1_acc_y * data->sensor1_basis_y[2];
 
-        const float rotation_contribution = sensor1_vec[0] * movement_vector[1] - sensor1_vec[1] * movement_vector[0];
-        total_yaw += rotation_contribution / config->ball_radius;
         total_movement_x += movement_vector[0];
         total_movement_y += movement_vector[1];
 
@@ -263,8 +261,6 @@ static void map_accumulated_movements_to_reference(const struct device *dev) {
         movement_vector[1] = data->sensor2_acc_x * data->sensor2_basis_x[1] + data->sensor2_acc_y * data->sensor2_basis_y[1];
         movement_vector[2] = data->sensor2_acc_x * data->sensor2_basis_x[2] + data->sensor2_acc_y * data->sensor2_basis_y[2];
 
-        const float rotation_contribution = sensor2_vec[0] * movement_vector[1] - sensor2_vec[1] * movement_vector[0];
-        total_yaw += rotation_contribution / config->ball_radius;
         total_movement_x += movement_vector[0];
         total_movement_y += movement_vector[1];
 
@@ -274,11 +270,9 @@ static void map_accumulated_movements_to_reference(const struct device *dev) {
 
     const int16_t int_movement_x = (int16_t)total_movement_x;
     const int16_t int_movement_y = (int16_t)total_movement_y;
-    const int16_t int_yaw = (int16_t)total_yaw;
 
     data->rpt_x += int_movement_x;
     data->rpt_y += int_movement_y;
-    data->rpt_yaw += int_yaw;
 
     data->rpt_x_remainder = total_movement_x - (float)int_movement_x;
     data->rpt_y_remainder = total_movement_y - (float)int_movement_y;

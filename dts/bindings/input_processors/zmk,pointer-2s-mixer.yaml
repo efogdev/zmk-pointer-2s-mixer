@@ -25,9 +25,7 @@ properties:
     type: uint8-array
     required: true
     default: [ (ff), (80), (0) ]
-
-  # not recommended to change
   ball-radius:
     type: int
     required: true
-    default: 127
+    default: 100

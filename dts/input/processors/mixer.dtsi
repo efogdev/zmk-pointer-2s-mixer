@@ -9,6 +9,6 @@
         yaw-div = <48>;
         sensor1-pos = [00 80 00];
         sensor2-pos = [ff 80 00];
-        ball-radius = <127>;
+        ball-radius = <100>;
     };
 };
