@@ -14,7 +14,8 @@ struct zip_pointer_2s_mixer_config {
     uint32_t sync_report_ms;
     uint32_t sync_report_yaw_ms;
     uint32_t yaw_div;
-
+    uint32_t yaw_mul;
+    uint32_t yaw_interference_thres;
     uint32_t ball_radius;
 
     // zero = down left bottom
@@ -40,7 +41,7 @@ struct zip_pointer_2s_mixer_data {
     int16_t rpt_y;
     float rpt_x_remainder;
     float rpt_y_remainder;
-    int16_t rpt_yaw;
+    float rpt_yaw;
 
     float sensor1_surface_x;
     float sensor1_surface_y;
@@ -115,15 +116,15 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         }
     }
 
-    // if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
-    //     const int16_t yaw = data->rpt_yaw / config->yaw_div;
-    //
-    //     if (yaw) {
-    //         data->last_rpt_time_yaw = now;
-    //         input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
-    //         data->rpt_yaw = 0;
-    //     }
-    // }
+    if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
+        const int16_t yaw = data->rpt_yaw / (float) config->yaw_div * (float) config->yaw_mul;
+
+        if (yaw) {
+            data->last_rpt_time_yaw = now;
+            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
+            data->rpt_yaw = 0;
+        }
+    }
 
     return 0;
 }
@@ -232,6 +233,7 @@ static void calculate_tangent_basis(const float px, const float py, const float 
 }
 
 static void map_accumulated_movements_to_reference(const struct device *dev) {
+    const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
     if (data->sensor1_acc_x == 0 && data->sensor1_acc_y == 0 &&
@@ -241,39 +243,69 @@ static void map_accumulated_movements_to_reference(const struct device *dev) {
 
     float total_movement_x = data->rpt_x_remainder;
     float total_movement_y = data->rpt_y_remainder;
+    float total_yaw = 0;
+
+    float s1_movement_vector[3] = {0};
+    float s2_movement_vector[3] = {0};
 
     if (data->sensor1_acc_x != 0 || data->sensor1_acc_y != 0) {
-        float movement_vector[3];
-        movement_vector[0] = data->sensor1_acc_x * data->sensor1_basis_x[0] + data->sensor1_acc_y * data->sensor1_basis_y[0];
-        movement_vector[1] = data->sensor1_acc_x * data->sensor1_basis_x[1] + data->sensor1_acc_y * data->sensor1_basis_y[1];
-        movement_vector[2] = data->sensor1_acc_x * data->sensor1_basis_x[2] + data->sensor1_acc_y * data->sensor1_basis_y[2];
-
-        total_movement_x += movement_vector[0];
-        total_movement_y += movement_vector[1];
-
-        data->sensor1_acc_x = 0;
-        data->sensor1_acc_y = 0;
+        s1_movement_vector[0] = data->sensor1_acc_x * data->sensor1_basis_x[0] + data->sensor1_acc_y * data->sensor1_basis_y[0];
+        s1_movement_vector[1] = data->sensor1_acc_x * data->sensor1_basis_x[1] + data->sensor1_acc_y * data->sensor1_basis_y[1];
+        s1_movement_vector[2] = data->sensor1_acc_x * data->sensor1_basis_x[2] + data->sensor1_acc_y * data->sensor1_basis_y[2];
     }
 
     if (data->sensor2_acc_x != 0 || data->sensor2_acc_y != 0) {
-        float movement_vector[3];
-        movement_vector[0] = data->sensor2_acc_x * data->sensor2_basis_x[0] + data->sensor2_acc_y * data->sensor2_basis_y[0];
-        movement_vector[1] = data->sensor2_acc_x * data->sensor2_basis_x[1] + data->sensor2_acc_y * data->sensor2_basis_y[1];
-        movement_vector[2] = data->sensor2_acc_x * data->sensor2_basis_x[2] + data->sensor2_acc_y * data->sensor2_basis_y[2];
-
-        total_movement_x += movement_vector[0];
-        total_movement_y += movement_vector[1];
-
-        data->sensor2_acc_x = 0;
-        data->sensor2_acc_y = 0;
+        s2_movement_vector[0] = data->sensor2_acc_x * data->sensor2_basis_x[0] + data->sensor2_acc_y * data->sensor2_basis_y[0];
+        s2_movement_vector[1] = data->sensor2_acc_x * data->sensor2_basis_x[1] + data->sensor2_acc_y * data->sensor2_basis_y[1];
+        s2_movement_vector[2] = data->sensor2_acc_x * data->sensor2_basis_x[2] + data->sensor2_acc_y * data->sensor2_basis_y[2];
     }
+
+    const float s1_radius_xy[2] = {data->sensor1_surface_x, data->sensor1_surface_y};
+    const float s2_radius_xy[2] = {data->sensor2_surface_x, data->sensor2_surface_y};
+
+    const float s1_radius_xy_length = sqrtf(s1_radius_xy[0] * s1_radius_xy[0] + s1_radius_xy[1] * s1_radius_xy[1]);
+    const float s2_radius_xy_length = sqrtf(s2_radius_xy[0] * s2_radius_xy[0] + s2_radius_xy[1] * s2_radius_xy[1]);
+
+    float s1_tangential_z = 0;
+    float s2_tangential_z = 0;
+
+    if (s1_radius_xy_length > 1e-6) {
+        const float s1_radius_xy_norm[2] = {s1_radius_xy[0] / s1_radius_xy_length, s1_radius_xy[1] / s1_radius_xy_length};
+        const float s1_tangent_dir[2] = {-s1_radius_xy_norm[1], s1_radius_xy_norm[0]};
+        s1_tangential_z = s1_movement_vector[0] * s1_tangent_dir[0] + s1_movement_vector[1] * s1_tangent_dir[1];
+        s1_tangential_z /= s1_radius_xy_length;
+    }
+
+    if (s2_radius_xy_length > 1e-6) {
+        const float s2_radius_xy_norm[2] = {s2_radius_xy[0] / s2_radius_xy_length, s2_radius_xy[1] / s2_radius_xy_length};
+        const float s2_tangent_dir[2] = {-s2_radius_xy_norm[1], s2_radius_xy_norm[0]};
+        s2_tangential_z = s2_movement_vector[0] * s2_tangent_dir[0] + s2_movement_vector[1] * s2_tangent_dir[1];
+        s2_tangential_z /= s2_radius_xy_length;
+    }
+
+    const float total_weight = s1_radius_xy_length + s2_radius_xy_length;
+    if (total_weight > 1e-6) {
+        total_yaw = (s1_tangential_z * s1_radius_xy_length + s2_tangential_z * s2_radius_xy_length) / total_weight;
+    }
+
+    total_movement_x += s1_movement_vector[0] + s2_movement_vector[0];
+    total_movement_y += s1_movement_vector[1] + s2_movement_vector[1];
+
+    const float xy_movement_magnitude = sqrtf(total_movement_x * total_movement_x + total_movement_y * total_movement_y);
+    if (xy_movement_magnitude < ((float) config->yaw_interference_thres / 10)) {
+        data->rpt_yaw += total_yaw;
+    }
+
+    data->sensor1_acc_x = 0;
+    data->sensor1_acc_y = 0;
+    data->sensor2_acc_x = 0;
+    data->sensor2_acc_y = 0;
 
     const int16_t int_movement_x = (int16_t)total_movement_x;
     const int16_t int_movement_y = (int16_t)total_movement_y;
 
     data->rpt_x += int_movement_x;
     data->rpt_y += int_movement_y;
-
     data->rpt_x_remainder = total_movement_x - (float)int_movement_x;
     data->rpt_y_remainder = total_movement_y - (float)int_movement_y;
 }
@@ -284,6 +316,8 @@ static void map_accumulated_movements_to_reference(const struct device *dev) {
         .sync_report_ms = DT_INST_PROP(n, sync_report_ms),                                         \
         .sync_report_yaw_ms = DT_INST_PROP(n, sync_report_yaw_ms),                                 \
         .yaw_div = DT_INST_PROP(n, yaw_div),                                                       \
+        .yaw_mul = DT_INST_PROP(n, yaw_mul),                                                       \
+        .yaw_interference_thres = DT_INST_PROP(n, yaw_interference_thres),                         \
         .sensor1_pos = DT_INST_PROP(n, sensor1_pos),                                               \
         .sensor2_pos = DT_INST_PROP(n, sensor2_pos),                                               \
         .ball_radius = DT_INST_PROP(n, ball_radius),                                               \

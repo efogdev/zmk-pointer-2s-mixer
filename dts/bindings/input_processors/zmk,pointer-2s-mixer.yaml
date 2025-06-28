@@ -6,15 +6,29 @@ properties:
   sync-report-ms:
     type: int
     required: true
-    default: 2
+    default: 4
   sync-report-yaw-ms:
     type: int
     required: true
-    default: 8
+    default: 16
+
+  # divisor
   yaw-div:
     type: int
     required: true
     default: 48
+
+  # multiplier
+  yaw-mul:
+    type: int
+    required: true
+    default: 1
+
+  # increase to allow more interference
+  yaw-interference-thres:
+    type: int
+    required: true
+    default: 8
 
   # zero = down left bottom (NOT BALL ORIGIN)
   sensor1-pos:
