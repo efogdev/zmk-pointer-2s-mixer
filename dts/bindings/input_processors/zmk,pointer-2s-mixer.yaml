@@ -28,7 +28,7 @@ properties:
   yaw-interference-thres:
     type: int
     required: true
-    default: 8
+    default: 42
 
   # zero = down left bottom (NOT BALL ORIGIN)
   sensor1-pos:

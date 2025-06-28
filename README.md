@@ -38,7 +38,11 @@ manifest:
 &zip_2s_mixer {
     status = "okay";
     sync-report-ms = <2>;
+    sync-report-yaw-ms = <8>;
     ball-radius = <107>; // 0 to 127
+    
+    yaw-div = <32>;
+    yaw-interference-thres = <42>;   
     
     // zero = left down bottom 
     sensor1-pos = [00 6F 00]; // X, Y, Z 
@@ -83,14 +87,16 @@ output_node {
 
 ## Configuration Properties
 
-| Property             | Type     | Description                                                                                  | Default    |
-|----------------------|----------|----------------------------------------------------------------------------------------------|------------|
-| `sync-report-ms`     | uint32   | Synchronization report interval in milliseconds                                              | 4          |
-| `sync-report-yaw-ms` | uint32   | Yaw report interval in milliseconds                                                          | 8          |
-| `yaw-div`            | uint32   | Yaw division factor                                                                          | 48         |
-| `ball-radius`        | uint32   | Radius of the trackball in arbitrary units                                                   | 100        |
-| `sensor1-pos`        | uint8[3] | Position of sensor [X, Y, Y] relative left down bottom corner of your arbitrary bounding box | [00 80 00] |
-| `sensor2-pos`        | uint8[3] |                                                                                              | [ff 80 00] |
+| Property                     | Type     | Description                                                                                  | Default    |
+|------------------------------|----------|----------------------------------------------------------------------------------------------|------------|
+| `sync-report-ms`             | uint32   | Synchronization report interval in milliseconds                                              | 4          |
+| `sync-report-yaw-ms`         | uint32   | Yaw report interval in milliseconds                                                          | 8          |
+| `yaw-div`                    | uint32   | Yaw divisor                                                                                  | 48         |
+| `yaw-mul`                    | uint32   | Yaw multiplier                                                                               | 1          |
+| `yaw-interference-threshold` | uint32   | Value from 0 to 128, increate to allow more interference between scroll and cursor movements | 42         |
+| `ball-radius`                | uint32   | Radius of the trackball in arbitrary units                                                   | 100        |
+| `sensor1-pos`                | uint8[3] | Position of sensor [X, Y, Y] relative left down bottom corner of your arbitrary bounding box | [00 80 00] |
+| `sensor2-pos`                | uint8[3] |                                                                                              | [ff 80 00] |
 
 ## Example Usage
 
@@ -103,7 +109,6 @@ See the complete example in `efogtech_trackball_0.dts` board, it features:
 ![Screenshot From 2025-06-28 18-02-20](https://github.com/user-attachments/assets/5413240c-485c-46e5-8a8b-307fdae793ed)
 
 ![Screenshot From 2025-06-28 18-02-48](https://github.com/user-attachments/assets/237f5441-d16a-464c-acfd-f3458e24ed01)
-
 
 ## Kconfig Options
 
