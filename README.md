@@ -100,7 +100,7 @@ output_node {
 
 ## Example Usage
 
-See the complete example in `efogtech_trackball_0.dts` board, it features:
+See the [complete example](https://github.com/efogdev/trackball-zmk-config) in `efogtech_trackball_0.dts` board, it features:
 
 - Two PMW3610 trackball sensors on separate SPI buses
 - Proper mixer configuration with ball radius of 107 units
