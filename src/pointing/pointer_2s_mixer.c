@@ -7,26 +7,19 @@
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
 
+#define  M_PI 3.14159265358979323846
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 struct zip_pointer_2s_mixer_config {
     uint32_t sync_report_ms;
     uint32_t sync_report_yaw_ms;
-    uint32_t yaw_div;
-    uint32_t yaw_mul;
+    uint32_t yaw_div, yaw_mul;
     uint32_t yaw_interference_thres;
     uint32_t ball_radius;
 
-    // zero = down left bottom
-    uint8_t sensor1_pos[3];
-    uint8_t sensor2_pos[3];
-};
-
-#define LATENCY_BUFFER_SIZE 100
-struct latency_event {
-    int64_t timestamp;
-    bool is_sensor1;
+    // zero = down left bottom, not the ball origin
+    uint8_t sensor1_pos[3], sensor2_pos[3];
 };
 
 // zero = ball origin
@@ -34,38 +27,23 @@ struct zip_pointer_2s_mixer_data {
     const struct device *dev;
     bool initialized;
 
-    int64_t last_rpt_time;
-    int64_t last_rpt_time_yaw;
+    int64_t last_rpt_time, last_rpt_time_yaw;
+    int16_t rpt_x, rpt_y, rpt_yaw;
+    float rpt_x_remainder, rpt_y_remainder;
 
-    int16_t rpt_x;
-    int16_t rpt_y;
-    float rpt_x_remainder;
-    float rpt_y_remainder;
-    float rpt_yaw;
-
-    float sensor1_surface_x;
-    float sensor1_surface_y;
-    float sensor1_surface_z;
-
-    float sensor2_surface_x;
-    float sensor2_surface_y;
-    float sensor2_surface_z;
-
-    float sensor1_acc_x;
-    float sensor1_acc_y;
-    float sensor2_acc_x;
-    float sensor2_acc_y;
-
-    float sensor1_basis_x[3];
-    float sensor1_basis_y[3];
-    float sensor2_basis_x[3];
-    float sensor2_basis_y[3];
+    int16_t s1_x, s1_y, s2_x, s2_y;
+    float sensor1_surface_x, sensor1_surface_y, sensor1_surface_z;
+    float sensor2_surface_x, sensor2_surface_y, sensor2_surface_z;
+    float sensor1_rotation_matrix[3][3], sensor2_rotation_matrix[3][3];
+    float sensor1_2d_rotation_matrix[2][2], sensor2_2d_rotation_matrix[2][2];
+    float radius;
 };
 
 static int data_init(const struct device *dev);
 static int line_sphere_intersection(float r, float x, float y, float z, float intersection[3]);
-static void calculate_tangent_basis(float px, float py, float pz, float basis_x[3], float basis_y[3]);
-static void map_accumulated_movements_to_reference(const struct device *dev);
+static void create_rotation_matrix(float surface_x, float surface_y, float surface_z, float radius, float matrix[3][3]);
+static void transform_sensor_input(float dx, float dy, float matrix[3][3], float *out_x, float *out_y, float *out_z);
+static void map_tangent_to_sphere(float dx, float dy, float radius, float rotation_matrix[3][3], float *out_x, float *out_y, float *out_z);
 
 static int sy_handle_event(const struct device *dev, struct input_event *event, const uint32_t param1,
                            uint32_t param2, struct zmk_input_processor_state *state) {
@@ -81,15 +59,15 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
     if (event->code == INPUT_REL_X) {
         if (param1 & INPUT_MIXER_SENSOR1) {
-            data->sensor1_acc_x += (float)event->value;
+            data->s1_x += event->value;
         } else {
-            data->sensor2_acc_x += (float)event->value;
+            data->s2_x += event->value;
         }
     } else if (event->code == INPUT_REL_Y) {
         if (param1 & INPUT_MIXER_SENSOR1) {
-            data->sensor1_acc_y += (float)event->value;
+            data->s1_y += event->value;
         } else {
-            data->sensor2_acc_y += (float)event->value;
+            data->s2_y += event->value;
         }
     }
 
@@ -98,7 +76,25 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
     const int64_t now = k_uptime_get();
     if (now - data->last_rpt_time > config->sync_report_ms) {
-        map_accumulated_movements_to_reference(dev);
+        float s1_x = 0, s1_y = 0, s1_z = 0;
+        map_tangent_to_sphere(data->s1_x, data->s1_y, data->radius, data->sensor1_rotation_matrix, &s1_x, &s1_y, &s1_z);
+
+        float s2_x = 0, s2_y = 0, s2_z = 0;
+        map_tangent_to_sphere(data->s2_x, data->s2_y, data->radius, data->sensor2_rotation_matrix, &s2_x, &s2_y, &s2_z);
+
+        const float final_s1_x = s1_x * data->sensor1_2d_rotation_matrix[0][0] + s1_y * data->sensor1_2d_rotation_matrix[0][1];
+        const float final_s1_y = s1_x * data->sensor1_2d_rotation_matrix[1][0] + s1_y * data->sensor1_2d_rotation_matrix[1][1];
+        const float final_s2_x = s2_x * data->sensor2_2d_rotation_matrix[0][0] + s2_y * data->sensor2_2d_rotation_matrix[0][1];
+        const float final_s2_y = s2_x * data->sensor2_2d_rotation_matrix[1][0] + s2_y * data->sensor2_2d_rotation_matrix[1][1];
+        const float x_mov = final_s1_x + final_s2_x + data->rpt_x_remainder;
+        const float y_mov = final_s1_y + final_s2_y + data->rpt_y_remainder;
+
+        data->rpt_x = x_mov;
+        data->rpt_y = y_mov;
+        data->rpt_x_remainder = x_mov - data->rpt_x;
+        data->rpt_y_remainder = y_mov - data->rpt_y;
+        data->rpt_yaw += s1_z + s2_z;
+        data->s1_x = data->s1_y = data->s2_x = data->s2_y = 0;
 
         const bool have_x = data->rpt_x != 0;
         const bool have_y = data->rpt_y != 0;
@@ -108,11 +104,12 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
             if (have_x) {
                 input_report(dev, INPUT_EV_REL, INPUT_REL_X, data->rpt_x, !have_y, K_NO_WAIT);
+                data->rpt_x = 0;
             }
             if (have_y) {
                 input_report(dev, INPUT_EV_REL, INPUT_REL_Y, data->rpt_y, true, K_NO_WAIT);
+                data->rpt_y = 0;
             }
-            data->rpt_x = data->rpt_y = 0;
         }
     }
 
@@ -121,12 +118,83 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
         if (yaw) {
             data->last_rpt_time_yaw = now;
-            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
+            // input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
             data->rpt_yaw = 0;
         }
     }
 
     return 0;
+}
+
+static void create_rotation_matrix(const float surface_x, const float surface_y, const float surface_z, const float radius, float matrix[3][3]) {
+    const float normal[3] = {surface_x / radius, surface_y / radius, surface_z / radius};
+    const float global_x[3] = {1, 0, 0};
+    const float dot_x_normal = global_x[0] * normal[0] + global_x[1] * normal[1] + global_x[2] * normal[2];
+
+    float local_x[3] = {
+        global_x[0] - dot_x_normal * normal[0],
+        global_x[1] - dot_x_normal * normal[1],
+        global_x[2] - dot_x_normal * normal[2]
+    };
+
+    float local_x_length = sqrtf(local_x[0] * local_x[0] + local_x[1] * local_x[1] + local_x[2] * local_x[2]);
+    if (local_x_length < 1e-6) {
+        const float global_y[3] = {0, 1, 0};
+        const float dot_y_normal = global_y[0] * normal[0] + global_y[1] * normal[1] + global_y[2] * normal[2];
+        local_x[0] = global_y[0] - dot_y_normal * normal[0];
+        local_x[1] = global_y[1] - dot_y_normal * normal[1];
+        local_x[2] = global_y[2] - dot_y_normal * normal[2];
+        local_x_length = sqrtf(local_x[0] * local_x[0] + local_x[1] * local_x[1] + local_x[2] * local_x[2]);
+    }
+
+    local_x[0] /= local_x_length;
+    local_x[1] /= local_x_length;
+    local_x[2] /= local_x_length;
+
+    const float local_y[3] = {
+        normal[1] * local_x[2] - normal[2] * local_x[1],
+        normal[2] * local_x[0] - normal[0] * local_x[2],
+        normal[0] * local_x[1] - normal[1] * local_x[0]
+    };
+
+    matrix[0][0] = local_x[0];
+    matrix[1][0] = local_x[1];
+    matrix[2][0] = local_x[2];
+
+    matrix[0][1] = local_y[0];
+    matrix[1][1] = local_y[1];
+    matrix[2][1] = local_y[2];
+
+    matrix[0][2] = normal[0];
+    matrix[1][2] = normal[1];
+    matrix[2][2] = normal[2];
+}
+
+static void transform_sensor_input(const float dx, const float dy, float matrix[3][3], float *out_x, float *out_y, float *out_z) {
+    *out_x = matrix[0][0] * dx + matrix[0][1] * dy;
+    *out_y = matrix[1][0] * dx + matrix[1][1] * dy;
+    *out_z = matrix[2][0] * dx + matrix[2][1] * dy;
+}
+
+static void map_tangent_to_sphere(const float dx, const float dy, const float radius, float rotation_matrix[3][3], float *out_x, float *out_y, float *out_z) {
+    float tangent_x, tangent_y, tangent_z;
+    transform_sensor_input(dx, dy, rotation_matrix, &tangent_x, &tangent_y, &tangent_z);
+
+    const float scale_factor = radius;
+    const float tangent_length = sqrtf(tangent_x*tangent_x + tangent_y*tangent_y);
+
+    if (tangent_length > 0) {
+        const float angle = tangent_length / radius;
+        const float arc_scale = sinf(angle) / tangent_length;
+
+        *out_x = tangent_x * arc_scale * scale_factor;
+        *out_y = tangent_y * arc_scale * scale_factor;
+        *out_z = tangent_z * (1.0f - cosf(angle)) * scale_factor;
+    } else {
+        *out_x = 0;
+        *out_y = 0;
+        *out_z = 0;
+    }
 }
 
 static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
@@ -157,6 +225,7 @@ static int data_init(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
     const float radius = (float) config->ball_radius;
+    data->radius = radius;
     float surface_p1[3];
     float surface_p2[3];
 
@@ -174,7 +243,7 @@ static int data_init(const struct device *dev) {
         (float) (*(uint8_t*)(config->sensor2_pos + 1)) - radius,
         (float) (*(uint8_t*)(config->sensor2_pos + 2)) - radius,
         surface_p2)) {
-        LOG_ERR("Failed to get surface position for sensor 1");
+        LOG_ERR("Failed to get surface position for sensor 2");
         return 0;
     }
 
@@ -191,123 +260,32 @@ static int data_init(const struct device *dev) {
         return 0;
     }
 
-    calculate_tangent_basis(data->sensor1_surface_x, data->sensor1_surface_y, data->sensor1_surface_z, data->sensor1_basis_x, data->sensor1_basis_y);
-    calculate_tangent_basis(data->sensor2_surface_x, data->sensor2_surface_y, data->sensor2_surface_z, data->sensor2_basis_x, data->sensor2_basis_y);
+    create_rotation_matrix(surface_p1[0], surface_p1[1], surface_p1[2], radius, data->sensor1_rotation_matrix);
+    create_rotation_matrix(surface_p2[0], surface_p2[1], surface_p2[2], radius, data->sensor2_rotation_matrix);
+
+    const float sensor1_angle_rad = -atan2f(surface_p1[1], surface_p1[0]);
+    data->sensor1_2d_rotation_matrix[0][0] = cosf(sensor1_angle_rad);
+    data->sensor1_2d_rotation_matrix[0][1] = -sinf(sensor1_angle_rad);
+    data->sensor1_2d_rotation_matrix[1][0] = sinf(sensor1_angle_rad);
+    data->sensor1_2d_rotation_matrix[1][1] = cosf(sensor1_angle_rad);
+
+    const float sensor2_angle_rad = -atan2f(surface_p2[1], surface_p2[0]);
+    data->sensor2_2d_rotation_matrix[0][0] = cosf(sensor2_angle_rad);
+    data->sensor2_2d_rotation_matrix[0][1] = -sinf(sensor2_angle_rad);
+    data->sensor2_2d_rotation_matrix[1][0] = sinf(sensor2_angle_rad);
+    data->sensor2_2d_rotation_matrix[1][1] = cosf(sensor2_angle_rad);
 
     LOG_INF("Sensor mixer driver initialized");
-    LOG_INF("  Ball radius: %d", (int) config->ball_radius);
-    LOG_INF("  Surface trackpoint 1 at (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
-    LOG_INF("  Surface trackpoint 2 at (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
+    LOG_DBG("  Ball radius: %d", (int) config->ball_radius);
+    LOG_DBG("== Sensor 1 ==");
+    LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
+    LOG_DBG("  > Rotation angle ≈ %d°", (int) (sensor1_angle_rad * 180.0f / M_PI));
+    LOG_DBG("== Sensor 2 ==");
+    LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
+    LOG_DBG("  > Rotation angle ≈ %d°", (int) (sensor2_angle_rad * 180.0f / M_PI));
 
     data->initialized = true;
     return 1;
-}
-
-static void calculate_tangent_basis(const float px, const float py, const float pz, float basis_x[3], float basis_y[3]) {
-    float normal[3] = {px, py, pz};
-    float norm = sqrtf(px*px + py*py + pz*pz);
-
-    normal[0] /= norm;
-    normal[1] /= norm;
-    normal[2] /= norm;
-
-    float ref[3];
-    if (fabsf(normal[2]) > 0.9f) {
-        ref[0] = 1.0f; ref[1] = 0.0f; ref[2] = 0.0f;
-    } else {
-        ref[0] = 0.0f; ref[1] = 0.0f; ref[2] = 1.0f;
-    }
-
-    basis_x[0] = normal[1] * ref[2] - normal[2] * ref[1];
-    basis_x[1] = normal[2] * ref[0] - normal[0] * ref[2];
-    basis_x[2] = normal[0] * ref[1] - normal[1] * ref[0];
-
-    norm = sqrtf(basis_x[0]*basis_x[0] + basis_x[1]*basis_x[1] + basis_x[2]*basis_x[2]);
-    basis_x[0] /= norm;
-    basis_x[1] /= norm;
-    basis_x[2] /= norm;
-
-    basis_y[0] = normal[1] * basis_x[2] - normal[2] * basis_x[1];
-    basis_y[1] = normal[2] * basis_x[0] - normal[0] * basis_x[2];
-    basis_y[2] = normal[0] * basis_x[1] - normal[1] * basis_x[0];
-}
-
-static void map_accumulated_movements_to_reference(const struct device *dev) {
-    const struct zip_pointer_2s_mixer_config *config = dev->config;
-    struct zip_pointer_2s_mixer_data *data = dev->data;
-
-    if (data->sensor1_acc_x == 0 && data->sensor1_acc_y == 0 &&
-        data->sensor2_acc_x == 0 && data->sensor2_acc_y == 0) {
-        return;
-    }
-
-    float total_movement_x = data->rpt_x_remainder;
-    float total_movement_y = data->rpt_y_remainder;
-    float total_yaw = 0;
-
-    float s1_movement_vector[3] = {0};
-    float s2_movement_vector[3] = {0};
-
-    if (data->sensor1_acc_x != 0 || data->sensor1_acc_y != 0) {
-        s1_movement_vector[0] = data->sensor1_acc_x * data->sensor1_basis_x[0] + data->sensor1_acc_y * data->sensor1_basis_y[0];
-        s1_movement_vector[1] = data->sensor1_acc_x * data->sensor1_basis_x[1] + data->sensor1_acc_y * data->sensor1_basis_y[1];
-        s1_movement_vector[2] = data->sensor1_acc_x * data->sensor1_basis_x[2] + data->sensor1_acc_y * data->sensor1_basis_y[2];
-    }
-
-    if (data->sensor2_acc_x != 0 || data->sensor2_acc_y != 0) {
-        s2_movement_vector[0] = data->sensor2_acc_x * data->sensor2_basis_x[0] + data->sensor2_acc_y * data->sensor2_basis_y[0];
-        s2_movement_vector[1] = data->sensor2_acc_x * data->sensor2_basis_x[1] + data->sensor2_acc_y * data->sensor2_basis_y[1];
-        s2_movement_vector[2] = data->sensor2_acc_x * data->sensor2_basis_x[2] + data->sensor2_acc_y * data->sensor2_basis_y[2];
-    }
-
-    const float s1_radius_xy[2] = {data->sensor1_surface_x, data->sensor1_surface_y};
-    const float s2_radius_xy[2] = {data->sensor2_surface_x, data->sensor2_surface_y};
-
-    const float s1_radius_xy_length = sqrtf(s1_radius_xy[0] * s1_radius_xy[0] + s1_radius_xy[1] * s1_radius_xy[1]);
-    const float s2_radius_xy_length = sqrtf(s2_radius_xy[0] * s2_radius_xy[0] + s2_radius_xy[1] * s2_radius_xy[1]);
-
-    float s1_tangential_z = 0;
-    float s2_tangential_z = 0;
-
-    if (s1_radius_xy_length > 1e-6) {
-        const float s1_radius_xy_norm[2] = {s1_radius_xy[0] / s1_radius_xy_length, s1_radius_xy[1] / s1_radius_xy_length};
-        const float s1_tangent_dir[2] = {-s1_radius_xy_norm[1], s1_radius_xy_norm[0]};
-        s1_tangential_z = s1_movement_vector[0] * s1_tangent_dir[0] + s1_movement_vector[1] * s1_tangent_dir[1];
-        s1_tangential_z /= s1_radius_xy_length;
-    }
-
-    if (s2_radius_xy_length > 1e-6) {
-        const float s2_radius_xy_norm[2] = {s2_radius_xy[0] / s2_radius_xy_length, s2_radius_xy[1] / s2_radius_xy_length};
-        const float s2_tangent_dir[2] = {-s2_radius_xy_norm[1], s2_radius_xy_norm[0]};
-        s2_tangential_z = s2_movement_vector[0] * s2_tangent_dir[0] + s2_movement_vector[1] * s2_tangent_dir[1];
-        s2_tangential_z /= s2_radius_xy_length;
-    }
-
-    const float total_weight = s1_radius_xy_length + s2_radius_xy_length;
-    if (total_weight > 1e-6) {
-        total_yaw = (s1_tangential_z * s1_radius_xy_length + s2_tangential_z * s2_radius_xy_length) / total_weight;
-    }
-
-    total_movement_x += s1_movement_vector[0] + s2_movement_vector[0];
-    total_movement_y += s1_movement_vector[1] + s2_movement_vector[1];
-
-    const float xy_movement_magnitude = sqrtf(total_movement_x * total_movement_x + total_movement_y * total_movement_y);
-    if (xy_movement_magnitude < ((float) config->yaw_interference_thres / 10)) {
-        data->rpt_yaw += total_yaw;
-    }
-
-    data->sensor1_acc_x = 0;
-    data->sensor1_acc_y = 0;
-    data->sensor2_acc_x = 0;
-    data->sensor2_acc_y = 0;
-
-    const int16_t int_movement_x = (int16_t)total_movement_x;
-    const int16_t int_movement_y = (int16_t)total_movement_y;
-
-    data->rpt_x += int_movement_x;
-    data->rpt_y += int_movement_y;
-    data->rpt_x_remainder = total_movement_x - (float)int_movement_x;
-    data->rpt_y_remainder = total_movement_y - (float)int_movement_y;
 }
 
 #define TL_INST(n)                                                                                 \

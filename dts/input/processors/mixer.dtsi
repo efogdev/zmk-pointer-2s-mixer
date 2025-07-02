@@ -8,7 +8,7 @@
         sync-report-yaw-ms = <16>;
         yaw-div = <32>;
 		yaw-mul = <1>;
-		yaw-interference-thres = <42>;
+		yaw-interference-thres = <64>;
         sensor1-pos = [00 80 00];
         sensor2-pos = [ff 80 00];
         ball-radius = <100>;
