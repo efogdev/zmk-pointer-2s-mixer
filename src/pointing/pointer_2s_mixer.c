@@ -7,6 +7,7 @@
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
 
+#define TWIST_FILTER_THRESHOLD_SEC 3
 #define M_PI 3.14159265358979323846
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
@@ -14,7 +15,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 struct zip_pointer_2s_mixer_config {
     uint32_t sync_report_ms, sync_report_yaw_ms;
     uint32_t yaw_div, yaw_mul;
-    uint32_t yaw_interference_thres; // in sensor points
+    uint32_t yaw_interference_thres; // in sensor points, CPI dependent
     uint32_t ball_radius;
 
     // zero (origin) = down left bottom, not the ball center
@@ -36,6 +37,9 @@ struct zip_pointer_2s_mixer_data {
     float sensor1_surface_x, sensor1_surface_y, sensor1_surface_z;
     float sensor2_surface_x, sensor2_surface_y, sensor2_surface_z;
     float rotation_matrix1[3][3], rotation_matrix2[3][3];
+
+    int64_t last_twist;
+    bool last_twist_direction;
 };
 
 static int data_init(const struct device *dev);
@@ -141,10 +145,9 @@ static void apply_rotation(float matrix[3][3], const float dx, const float dy, f
     *out_y = matrix[1][0] * dx + matrix[1][1] * dy;
 }
 
-static bool last_direction = true; // ignore single opposite direction event
 static int16_t detect_twist(const struct device *dev, const int16_t s1_x, const int16_t s1_y, const int16_t s2_x, const int16_t s2_y) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
-    const struct zip_pointer_2s_mixer_data *data = dev->data;
+    struct zip_pointer_2s_mixer_data *data = dev->data;
 
     if (s1_x == 0 && s1_y == 0 && s2_x == 0 && s2_y == 0) {
         return 0;
@@ -159,27 +162,48 @@ static int16_t detect_twist(const struct device *dev, const int16_t s1_x, const 
         return 0;
     }
 
+    const int64_t now = k_uptime_get();
+    if (now - data->last_twist > TWIST_FILTER_THRESHOLD_SEC * 1000) {
+        data->last_twist = now;
+        return 0;
+    }
+
     if (s1_y > (int) config->yaw_interference_thres && s2_y < -(int) config->yaw_interference_thres) {
-        if (last_direction != true) {
-            last_direction = true;
+        if (data->last_twist_direction != true) {
+            data->last_twist_direction = true;
             return 0;
         }
 
-        last_direction = true;
+        data->last_twist = now;
+        data->last_twist_direction = true;
         return -((float)(s1_y - s2_y) / 2.f * (float) config->yaw_mul / (float) config->yaw_div);
     }
 
     if (s1_y < -(int) config->yaw_interference_thres && s2_y > (int) config->yaw_interference_thres) {
-        if (last_direction != false) {
-            last_direction = false;
+        if (data->last_twist_direction != false) {
+            data->last_twist_direction = false;
             return 0;
         }
 
-        last_direction = false;
+        data->last_twist = now;
+        data->last_twist_direction = false;
         return ((float)(s2_y - s1_y) / 2.f * (float) config->yaw_mul / (float) config->yaw_div);
     }
 
     return 0;
+}
+
+static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
+    const float distance = sqrtf(x*x + y*y + z*z);
+    if (distance < 1e-10) {
+        return 0;
+    }
+
+    const float scale = r / distance;
+    intersection[0] = x * scale;
+    intersection[1] = y * scale;
+    intersection[2] = z * scale;
+    return 1;
 }
 
 static int sy_handle_event(const struct device *dev, struct input_event *event, const uint32_t param1,
@@ -227,19 +251,6 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     }
 
     return 0;
-}
-
-static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
-    const float distance = sqrtf(x*x + y*y + z*z);
-    if (distance < 1e-10) {
-        return 0;
-    }
-
-    const float scale = r / distance;
-    intersection[0] = x * scale;
-    intersection[1] = y * scale;
-    intersection[2] = z * scale;
-    return 1;
 }
 
 static struct zmk_input_processor_driver_api sy_driver_api = {
