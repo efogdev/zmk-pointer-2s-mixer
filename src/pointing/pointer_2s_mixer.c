@@ -8,7 +8,7 @@
 #include <zmk/keymap.h>
 
 #define TWIST_FILTER_THRESHOLD_SEC 3
-#define M_PI 3.14159265358979323846
+#define REMAINDER_TTL_MS 200
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -29,7 +29,7 @@ struct zip_pointer_2s_mixer_data {
     int64_t last_rpt_time, last_rpt_time_yaw;
 
     int16_t rpt_x, rpt_y;
-    float rpt_x_remainder, rpt_y_remainder;
+    float rpt_x_remainder, rpt_y_remainder, rpt_yaw_remainder;
 
     int16_t s1_x, s1_y, s2_x, s2_y;
     int16_t yaw_s1_x, yaw_s1_y, yaw_s2_x, yaw_s2_y;
@@ -43,7 +43,7 @@ struct zip_pointer_2s_mixer_data {
 };
 
 static int data_init(const struct device *dev);
-static int16_t detect_twist(const struct device *dev, int16_t s1_x, int16_t s1_y, int16_t s2_x, int16_t s2_y);
+static float calculate_twist(const struct device *dev);
 static int line_sphere_intersection(float r, float x, float y, float z, float intersection[3]);
 static void calculate_rotation_matrix(float from_x, float from_y, float from_z, float to_x, float to_y, float to_z, float matrix[3][3]);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
@@ -56,8 +56,14 @@ static int process_and_report(const struct device *dev) {
         float rotated_x, rotated_y;
         apply_rotation(data->rotation_matrix1, data->s1_x, data->s1_y, &rotated_x, &rotated_y);
 
-        data->rpt_x_remainder += rotated_x;
-        data->rpt_y_remainder += rotated_y;
+        if (now - data->last_rpt_time > REMAINDER_TTL_MS) {
+            data->rpt_x_remainder = rotated_x;
+            data->rpt_y_remainder = rotated_y;
+        } else {
+            data->rpt_x_remainder += rotated_x;
+            data->rpt_y_remainder += rotated_y;
+        }
+
         data->yaw_s1_x += rotated_x;
         data->yaw_s1_y += rotated_y;
         data->s1_x = 0;
@@ -68,8 +74,14 @@ static int process_and_report(const struct device *dev) {
         float rotated_x, rotated_y;
         apply_rotation(data->rotation_matrix2, data->s2_x, data->s2_y, &rotated_x, &rotated_y);
 
-        data->rpt_x_remainder += rotated_x;
-        data->rpt_y_remainder += rotated_y;
+        if (now - data->last_rpt_time > REMAINDER_TTL_MS) {
+            data->rpt_x_remainder = rotated_x;
+            data->rpt_y_remainder = rotated_y;
+        } else {
+            data->rpt_x_remainder += rotated_x;
+            data->rpt_y_remainder += rotated_y;
+        }
+
         data->yaw_s2_x += rotated_x;
         data->yaw_s2_y += rotated_y;
         data->s2_x = 0;
@@ -145,9 +157,16 @@ static void apply_rotation(float matrix[3][3], const float dx, const float dy, f
     *out_y = matrix[1][0] * dx + matrix[1][1] * dy;
 }
 
-static int16_t detect_twist(const struct device *dev, const int16_t s1_x, const int16_t s1_y, const int16_t s2_x, const int16_t s2_y) {
+static float calculate_twist(const struct device *dev) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
+
+    const int16_t s1_x = data->yaw_s1_x;
+    const int16_t s1_y = data->yaw_s1_y;
+    const int16_t s2_x = data->yaw_s2_x;
+    const int16_t s2_y = data->yaw_s2_y;
+
+    data->yaw_s1_x = data->yaw_s1_y = data->yaw_s2_x = data->yaw_s2_y = 0;
 
     if (s1_x == 0 && s1_y == 0 && s2_x == 0 && s2_y == 0) {
         return 0;
@@ -241,13 +260,20 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     }
 
     if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
-        const int16_t yaw = detect_twist(dev, data->yaw_s1_x, data->yaw_s1_y, data->yaw_s2_x, data->yaw_s2_y);
-        if (yaw) {
-            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw, true, K_NO_WAIT);
+        const float yaw_float = calculate_twist(dev);
+        if (now - data->last_rpt_time_yaw > REMAINDER_TTL_MS) {
+            data->rpt_yaw_remainder = yaw_float;
+        } else {
+            data->rpt_yaw_remainder += yaw_float;
+        }
+        
+        const int16_t yaw_int = (int16_t)data->rpt_yaw_remainder;
+        data->rpt_yaw_remainder -= yaw_int;
+        if (yaw_int != 0) {
+            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw_int, true, K_NO_WAIT);
         }
 
         data->last_rpt_time_yaw = now;
-        data->yaw_s1_x = data->yaw_s1_y = data->yaw_s2_x = data->yaw_s2_y = 0;
     }
 
     return 0;
