@@ -7,8 +7,9 @@
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
 
-#define TWIST_FILTER_THRESHOLD_SEC 1
-#define REMAINDER_TTL_MS 100
+#define REMAINDER_TTL_MS 32
+#define TWIST_REMAINDER_TTL_MS 128
+#define TWIST_FILTER_THRESHOLD_MS 500
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -168,7 +169,6 @@ static float calculate_twist(const struct device *dev) {
     const int16_t s2_y = data->yaw_s2_y;
 
     data->yaw_s1_x = data->yaw_s1_y = data->yaw_s2_x = data->yaw_s2_y = 0;
-
     if (s1_x == 0 && s1_y == 0 && s2_x == 0 && s2_y == 0) {
         return 0;
     }
@@ -185,7 +185,7 @@ static float calculate_twist(const struct device *dev) {
     }
 
     const int64_t now = k_uptime_get();
-    if (now - data->last_twist > TWIST_FILTER_THRESHOLD_SEC * 1000) {
+    if (now - data->last_twist > TWIST_FILTER_THRESHOLD_MS) {
         LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = time_filter)", s1_x, s1_y, s2_x, s2_y);
         data->last_twist = now;
         return 0;
@@ -217,7 +217,7 @@ static float calculate_twist(const struct device *dev) {
                 ? -((float)(t->val1 - t->val2) * (float)config->yaw_mul / (float)config->yaw_div)
                 : ((float)(t->val2 - t->val1) * (float)config->yaw_mul / (float)config->yaw_div);
 
-            LOG_DBG("(%d, %d) (%d, %d): movement results in scroll value of %d",
+            LOG_DBG("(%d, %d) (%d, %d): movement resulted in scroll value of %d",
                     s1_x, s1_y, s2_x, s2_y, (int)result);
 
             data->last_twist = now;
@@ -278,7 +278,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
     if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
         const float yaw_float = calculate_twist(dev);
-        if (now - data->last_rpt_time_yaw > REMAINDER_TTL_MS) {
+        if (now - data->last_rpt_time_yaw > TWIST_REMAINDER_TTL_MS) {
             data->rpt_yaw_remainder = yaw_float;
         } else {
             data->rpt_yaw_remainder += yaw_float;
@@ -355,10 +355,8 @@ static int data_init(const struct device *dev) {
     calculate_rotation_matrix(data->sensor2_surface_x, data->sensor2_surface_y, data->sensor2_surface_z, 0, 0, -radius, data->rotation_matrix2);
 
     LOG_INF("Sensor mixer driver initialized");
-    LOG_DBG("  Ball radius: %d", (int) config->ball_radius);
-    LOG_DBG("== Sensor 1 ==");
+    LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
     LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
-    LOG_DBG("== Sensor 2 ==");
     LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
 
     data->initialized = true;
