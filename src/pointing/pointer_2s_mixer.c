@@ -175,15 +175,18 @@ static float calculate_twist(const struct device *dev) {
 
     if (abs(s1_x) < config->yaw_thres && abs(s1_y) < config->yaw_thres &&
         abs(s2_x) < config->yaw_thres && abs(s2_y) < config->yaw_thres) {
+        LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = yaw_thres)", s1_x, s1_y, s2_x, s2_y);
         return 0;
     }
 
     if (abs(s1_x + s2_x) > config->yaw_interference_thres || abs(s1_y + s2_y) > config->yaw_interference_thres) {
+        LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = yaw_interference_thres)", s1_x, s1_y, s2_x, s2_y);
         return 0;
     }
 
     const int64_t now = k_uptime_get();
     if (now - data->last_twist > TWIST_FILTER_THRESHOLD_SEC * 1000) {
+        LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = time_filter)", s1_x, s1_y, s2_x, s2_y);
         data->last_twist = now;
         return 0;
     }
@@ -206,6 +209,7 @@ static float calculate_twist(const struct device *dev) {
         if (condition) {
             if (data->last_twist_direction != t->direction) {
                 data->last_twist_direction = t->direction;
+                LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = direction_filter)", s1_x, s1_y, s2_x, s2_y);
                 return 0;
             }
 
@@ -213,7 +217,7 @@ static float calculate_twist(const struct device *dev) {
                 ? -((float)(t->val1 - t->val2) * (float)config->yaw_mul / (float)config->yaw_div)
                 : ((float)(t->val2 - t->val1) * (float)config->yaw_mul / (float)config->yaw_div);
 
-            LOG_INF("(%d, %d)/(%d, %d) movement has been translated into scroll: %d",
+            LOG_DBG("(%d, %d) (%d, %d): movement results in scroll value of %d",
                     s1_x, s1_y, s2_x, s2_y, (int)result);
 
             data->last_twist = now;
@@ -279,7 +283,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         } else {
             data->rpt_yaw_remainder += yaw_float;
         }
-        
+
         const int16_t yaw_int = (int16_t)data->rpt_yaw_remainder;
         data->rpt_yaw_remainder -= yaw_int;
         if (yaw_int != 0) {
