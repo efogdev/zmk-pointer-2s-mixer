@@ -13,12 +13,12 @@ Add this module to your ZMK config by including it in your `west.yml`:
 manifest:
   remotes:
       ...
-        - name: efogdev
+      - name: efogdev
         url-base: https://github.com/efogdev
 
   projects:
       ...
-        - name: zmk-pointer-2s-mixer
+      - name: zmk-pointer-2s-mixer
         remote: efogdev
         revision: main
 ```
@@ -41,12 +41,12 @@ manifest:
     sync-report-yaw-ms = <8>;
     ball-radius = <107>; // 0 to 127
     
-    yaw-div = <32>;
-    yaw-interference-thres = <42>;   
+    yaw-div = <4>;
+    yaw-interference-thres = <10>;   
     
-    // zero = left down bottom 
-    sensor1-pos = [00 6F 00]; // X, Y, Z 
-    sensor2-pos = [ff 56 00];
+    // zero = left down bottom
+    sensor1-pos = [31 4B 2D]; // X, Y, Z 
+	  sensor2-pos = [C1 3C 2D];
 };
 ```
 
@@ -100,15 +100,9 @@ output_node {
 
 ## Example Usage
 
-See the [complete example](https://github.com/efogdev/trackball-zmk-config) in `efogtech_trackball_0.dts` board, it features:
+See the [complete example](https://github.com/efogdev/trackball-zmk-config) in `efogtech_trackball_0.dts` board.
 
-- Two PMW3610 trackball sensors on separate SPI buses
-- Proper mixer configuration with ball radius of 107 units
-- Sensor positions at [00 6F 00] and [ff 56 00]
-
-![Screenshot From 2025-06-28 18-02-20](https://github.com/user-attachments/assets/5413240c-485c-46e5-8a8b-307fdae793ed)
-
-![Screenshot From 2025-06-28 18-02-48](https://github.com/user-attachments/assets/237f5441-d16a-464c-acfd-f3458e24ed01)
+![image](https://github.com/user-attachments/assets/86a2420e-6595-49a2-b843-836f6a7a4053)
 
 ## Kconfig Options
 
