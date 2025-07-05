@@ -39,14 +39,18 @@ manifest:
     status = "okay";
     sync-report-ms = <2>;
     sync-report-yaw-ms = <8>;
-    ball-radius = <107>; // 0 to 127
+    ball-radius = <102>; // 0 to 127
     
-    yaw-div = <4>;
-    yaw-interference-thres = <10>;   
+    yaw-div = <4>; // divider
+    yaw-mul = <1>; // multiplier
+
+    // CPI dependent values
+    yaw-interference-thres = <6>; // increase this value to descrease interference 
+    yaw-thres = <2>; // filters out minimal twist movements 
     
     // zero = left down bottom
     sensor1-pos = [31 4B 2D]; // X, Y, Z 
-	  sensor2-pos = [C1 3C 2D];
+    sensor2-pos = [C1 3C 2D];
 };
 ```
 
@@ -84,19 +88,6 @@ output_node {
     device = <&zip_2s_mixer>;
 };
 ```
-
-## Configuration Properties
-
-| Property                     | Type     | Description                                                                                  | Default    |
-|------------------------------|----------|----------------------------------------------------------------------------------------------|------------|
-| `sync-report-ms`             | uint32   | Synchronization report interval in milliseconds                                              | 4          |
-| `sync-report-yaw-ms`         | uint32   | Yaw report interval in milliseconds                                                          | 8          |
-| `yaw-div`                    | uint32   | Yaw divisor                                                                                  | 48         |
-| `yaw-mul`                    | uint32   | Yaw multiplier                                                                               | 1          |
-| `yaw-interference-threshold` | uint32   | Value from 0 to 128, increate to allow more interference between scroll and cursor movements | 42         |
-| `ball-radius`                | uint32   | Radius of the trackball in arbitrary units                                                   | 100        |
-| `sensor1-pos`                | uint8[3] | Position of sensor [X, Y, Y] relative left down bottom corner of your arbitrary bounding box | [00 80 00] |
-| `sensor2-pos`                | uint8[3] |                                                                                              | [ff 80 00] |
 
 ## Example Usage
 
