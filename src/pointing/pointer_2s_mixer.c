@@ -321,18 +321,18 @@ static int data_init(const struct device *dev) {
     float surface_p1[3], surface_p2[3];
 
     if (!line_sphere_intersection(radius,
-        (float) (*(uint8_t*)(config->sensor1_pos + 0)) - 127.f,
-        (float) (*(uint8_t*)(config->sensor1_pos + 1)) - 127.f,
-        (float) (*(uint8_t*)(config->sensor1_pos + 2)) - 127.f,
+        (float) *(uint8_t*)(config->sensor1_pos + 0) - 127.f,
+        (float) *(uint8_t*)(config->sensor1_pos + 1) - 127.f,
+        (float) *(uint8_t*)(config->sensor1_pos + 2) - 127.f,
         surface_p1)) {
         LOG_ERR("Failed to get surface position for sensor 1");
         return 0.f;
     }
 
     if (!line_sphere_intersection(radius,
-        (float) (*(uint8_t*)(config->sensor2_pos + 0)) - 127.f,
-        (float) (*(uint8_t*)(config->sensor2_pos + 1)) - 127.f,
-        (float) (*(uint8_t*)(config->sensor2_pos + 2)) - 127.f,
+        (float) *(uint8_t*)(config->sensor2_pos + 0) - 127.f,
+        (float) *(uint8_t*)(config->sensor2_pos + 1) - 127.f,
+        (float) *(uint8_t*)(config->sensor2_pos + 2) - 127.f,
         surface_p2)) {
         LOG_ERR("Failed to get surface position for sensor 2");
         return 0;
