@@ -7,8 +7,8 @@
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
 
-#define TWIST_FILTER_THRESHOLD_SEC 3
-#define REMAINDER_TTL_MS 200
+#define TWIST_FILTER_THRESHOLD_SEC 1
+#define REMAINDER_TTL_MS 100
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -16,6 +16,7 @@ struct zip_pointer_2s_mixer_config {
     uint32_t sync_report_ms, sync_report_yaw_ms;
     uint32_t yaw_div, yaw_mul;
     uint32_t yaw_interference_thres; // in sensor points, CPI dependent
+    uint32_t yaw_thres; // in sensor points, CPI dependent
     uint32_t ball_radius;
 
     // zero (origin) = down left bottom, not the ball center
@@ -38,25 +39,28 @@ struct zip_pointer_2s_mixer_data {
     float sensor2_surface_x, sensor2_surface_y, sensor2_surface_z;
     float rotation_matrix1[3][3], rotation_matrix2[3][3];
 
-    int64_t last_twist;
-    bool last_twist_direction;
+    int64_t last_twist; // to filter out single events as they are probably accidental
+    bool last_twist_direction; // to filter out first event in the opposite direction
+};
+
+struct twist_detection {
+    int16_t val1;
+    int16_t val2;
+    bool direction;
 };
 
 static int data_init(const struct device *dev);
-static float calculate_twist(const struct device *dev);
-static int line_sphere_intersection(float r, float x, float y, float z, float intersection[3]);
-static void calculate_rotation_matrix(float from_x, float from_y, float from_z, float to_x, float to_y, float to_z, float matrix[3][3]);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const int64_t now = k_uptime_get();
+    const int64_t dt = now - data->last_rpt_time;
+    float rotated_x = 0, rotated_y = 0;
 
     if (data->s1_x != 0 || data->s1_y != 0) {
-        float rotated_x, rotated_y;
         apply_rotation(data->rotation_matrix1, data->s1_x, data->s1_y, &rotated_x, &rotated_y);
-
-        if (now - data->last_rpt_time > REMAINDER_TTL_MS) {
+        if (dt > REMAINDER_TTL_MS) {
             data->rpt_x_remainder = rotated_x;
             data->rpt_y_remainder = rotated_y;
         } else {
@@ -71,10 +75,8 @@ static int process_and_report(const struct device *dev) {
     }
 
     if (data->s2_x != 0 || data->s2_y != 0) {
-        float rotated_x, rotated_y;
         apply_rotation(data->rotation_matrix2, data->s2_x, data->s2_y, &rotated_x, &rotated_y);
-
-        if (now - data->last_rpt_time > REMAINDER_TTL_MS) {
+        if (dt > REMAINDER_TTL_MS) {
             data->rpt_x_remainder = rotated_x;
             data->rpt_y_remainder = rotated_y;
         } else {
@@ -88,16 +90,14 @@ static int process_and_report(const struct device *dev) {
         data->s2_y = 0;
     }
 
-    data->rpt_x = (int16_t)data->rpt_x_remainder;
-    data->rpt_y = (int16_t)data->rpt_y_remainder;
+    data->rpt_x = (int16_t) data->rpt_x_remainder;
+    data->rpt_y = (int16_t) data->rpt_y_remainder;
     data->rpt_x_remainder -= data->rpt_x;
     data->rpt_y_remainder -= data->rpt_y;
 
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
-        data->last_rpt_time = now;
-
         if (have_x) {
             input_report(dev, INPUT_EV_REL, INPUT_REL_X, data->rpt_x, !have_y, K_NO_WAIT);
             data->rpt_x = 0;
@@ -108,6 +108,7 @@ static int process_and_report(const struct device *dev) {
         }
     }
 
+    data->last_rpt_time = now;
     return 0;
 }
 
@@ -172,8 +173,8 @@ static float calculate_twist(const struct device *dev) {
         return 0;
     }
 
-    if (abs(s1_x) < config->yaw_interference_thres && abs(s1_y) < config->yaw_interference_thres &&
-        abs(s2_x) < config->yaw_interference_thres && abs(s2_y) < config->yaw_interference_thres) {
+    if (abs(s1_x) < config->yaw_thres && abs(s1_y) < config->yaw_thres &&
+        abs(s2_x) < config->yaw_thres && abs(s2_y) < config->yaw_thres) {
         return 0;
     }
 
@@ -187,26 +188,38 @@ static float calculate_twist(const struct device *dev) {
         return 0;
     }
 
-    if (s1_y > (int) config->yaw_interference_thres && s2_y < -(int) config->yaw_interference_thres) {
-        if (data->last_twist_direction != true) {
-            data->last_twist_direction = true;
-            return 0;
+    const struct twist_detection twist_scenarios[] = {
+        {s1_x, s2_x, true},   // s1_x > 0, s2_x < 0
+        {s1_x, s2_x, false},  // s1_x < 0, s2_x > 0
+        {s1_y, s2_y, true},   // s1_y > 0, s2_y < 0
+        {s1_y, s2_y, false}   // s1_y < 0, s2_y > 0
+    };
+
+    for (int i = 0; i < 4; i++) {
+        const struct twist_detection *t = &twist_scenarios[i];
+        const int16_t threshold = config->yaw_interference_thres;
+
+        const bool condition = (i % 2 == 0)
+            ? (t->val1 > threshold && t->val2 < -threshold)
+            : (t->val1 < -threshold && t->val2 > threshold);
+
+        if (condition) {
+            if (data->last_twist_direction != t->direction) {
+                data->last_twist_direction = t->direction;
+                return 0;
+            }
+
+            const float result = (i % 2 == 0)
+                ? -((float)(t->val1 - t->val2) * (float)config->yaw_mul / (float)config->yaw_div)
+                : ((float)(t->val2 - t->val1) * (float)config->yaw_mul / (float)config->yaw_div);
+
+            LOG_INF("(%d, %d)/(%d, %d) movement has been translated into scroll: %d",
+                    s1_x, s1_y, s2_x, s2_y, (int)result);
+
+            data->last_twist = now;
+            data->last_twist_direction = t->direction;
+            return result;
         }
-
-        data->last_twist = now;
-        data->last_twist_direction = true;
-        return -((float)(s1_y - s2_y) / 2.f * (float) config->yaw_mul / (float) config->yaw_div);
-    }
-
-    if (s1_y < -(int) config->yaw_interference_thres && s2_y > (int) config->yaw_interference_thres) {
-        if (data->last_twist_direction != false) {
-            data->last_twist_direction = false;
-            return 0;
-        }
-
-        data->last_twist = now;
-        data->last_twist_direction = false;
-        return ((float)(s2_y - s1_y) / 2.f * (float) config->yaw_mul / (float) config->yaw_div);
     }
 
     return 0;
@@ -286,6 +299,14 @@ static struct zmk_input_processor_driver_api sy_driver_api = {
 static int sy_init(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
     data->dev = dev;
+
+#if !IS_ENABLED(CONFIG_POINTER_2S_MIXER_LAZY_INIT)
+    if (!data_init(dev)) {
+        LOG_ERR("Failed to initialize mixer driver data!");
+        return -1;
+    }
+#endif
+
     return 0;
 }
 
@@ -348,6 +369,7 @@ static int data_init(const struct device *dev) {
         .yaw_div = DT_INST_PROP(n, yaw_div),                                                       \
         .yaw_mul = DT_INST_PROP(n, yaw_mul),                                                       \
         .yaw_interference_thres = DT_INST_PROP(n, yaw_interference_thres),                         \
+        .yaw_thres = DT_INST_PROP(n, yaw_thres),                                                   \
         .sensor1_pos = DT_INST_PROP(n, sensor1_pos),                                               \
         .sensor2_pos = DT_INST_PROP(n, sensor2_pos),                                               \
         .ball_radius = DT_INST_PROP(n, ball_radius),                                               \

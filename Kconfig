@@ -6,3 +6,15 @@
 #
 
 rsource "src/pointing/Kconfig"
+
+menuconfig POINTER_2S_MIXER
+  bool "Pointer 2-sensor mixer"
+  depends on INPUT
+
+if POINTER_2S_MIXER
+
+config POINTER_2S_MIXER_LAZY_INIT
+  bool "Make all the calculations not on boot but on fist data event (useful to see logs)"
+  default n
+
+endif # POINTER_2S_MIXER

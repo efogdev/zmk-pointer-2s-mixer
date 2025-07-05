@@ -6,29 +6,32 @@ properties:
   sync-report-ms:
     type: int
     required: true
-    default: 4
+    default: 2
   sync-report-yaw-ms:
     type: int
     required: true
-    default: 16
+    default: 8
 
-  # divisor
-  yaw-div:
+  yaw-div: # divisor
     type: int
     required: true
-    default: 48
-
-  # multiplier
-  yaw-mul:
+    default: 16
+  yaw-mul: # multiplier
     type: int
     required: true
     default: 1
 
-  # increase to allow more interference
+  # CPI dependent! Smaller value = less interference
   yaw-interference-thres:
     type: int
     required: true
-    default: 42
+    default: 10
+
+  # CPI dependent! Filters out twist movements smaller than N points
+  yaw-thres:
+    type: int
+    required: true
+    default: 4
 
   # zero = down left bottom (NOT BALL ORIGIN)
   sensor1-pos:
@@ -42,4 +45,4 @@ properties:
   ball-radius:
     type: int
     required: true
-    default: 100
+    default: 120
