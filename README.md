@@ -39,17 +39,17 @@ manifest:
     status = "okay";
     sync-report-ms = <2>;
     sync-report-yaw-ms = <8>;
-    ball-radius = <102>; // 0 to 127
+    ball-radius = <102>; // 24 to 127
     
     yaw-div = <4>; // divider
     yaw-mul = <1>; // multiplier
 
     // CPI dependent values
     yaw-interference-thres = <6>; // increase this value to descrease interference 
-    yaw-thres = <2>; // filters out minimal twist movements 
+    yaw-thres = <2>; // filters out minimal twist movement 
     
     // zero = left down bottom
-    sensor1-pos = [31 4B 2D]; // X, Y, Z 
+    sensor1-pos = [31 4B 2D]; // X, Y, Z (mapped to uint8_t)
     sensor2-pos = [C1 3C 2D];
 };
 ```
