@@ -9,7 +9,8 @@
 
 #define REMAINDER_TTL_MS 32
 #define TWIST_REMAINDER_TTL_MS 128
-#define TWIST_FILTER_THRESHOLD_MS 500
+#define TWIST_FILTER_TTL_MS 1000
+#define TWIST_NO_FILTER_THRES_MS 64
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -162,6 +163,8 @@ static void apply_rotation(float matrix[3][3], const float dx, const float dy, f
 static float calculate_twist(const struct device *dev) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
+    const int64_t now = k_uptime_get();
+    const int64_t passed = now - data->last_twist;
 
     const int16_t s1_x = data->yaw_s1_x;
     const int16_t s1_y = data->yaw_s1_y;
@@ -174,19 +177,20 @@ static float calculate_twist(const struct device *dev) {
     }
 
     if (abs(s1_x) < config->yaw_thres && abs(s1_y) < config->yaw_thres &&
-        abs(s2_x) < config->yaw_thres && abs(s2_y) < config->yaw_thres) {
+        abs(s2_x) < config->yaw_thres && abs(s2_y) < config->yaw_thres &&
+        passed > TWIST_NO_FILTER_THRES_MS) {
         LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = yaw_thres)", s1_x, s1_y, s2_x, s2_y);
         return 0;
     }
 
-    if (abs(s1_x + s2_x) > config->yaw_interference_thres || abs(s1_y + s2_y) > config->yaw_interference_thres) {
+    if ((abs(s1_x + s2_x) > config->yaw_interference_thres || abs(s1_y + s2_y) > config->yaw_interference_thres) &&
+        passed > TWIST_NO_FILTER_THRES_MS) {
         LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = yaw_interference_thres)", s1_x, s1_y, s2_x, s2_y);
         return 0;
     }
 
-    const int64_t now = k_uptime_get();
-    if (now - data->last_twist > TWIST_FILTER_THRESHOLD_MS) {
-        LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = time_filter)", s1_x, s1_y, s2_x, s2_y);
+    if (passed > TWIST_FILTER_TTL_MS) {
+        LOG_WRN("(%d, %d) (%d, %d): discarded twist (reason = time_filter)", s1_x, s1_y, s2_x, s2_y);
         data->last_twist = now;
         return 0;
     }
@@ -209,7 +213,7 @@ static float calculate_twist(const struct device *dev) {
         if (condition) {
             if (data->last_twist_direction != t->direction) {
                 data->last_twist_direction = t->direction;
-                LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = direction_filter)", s1_x, s1_y, s2_x, s2_y);
+                LOG_WRN("(%d, %d) (%d, %d): discarded twist (reason = direction_filter)", s1_x, s1_y, s2_x, s2_y);
                 return 0;
             }
 
