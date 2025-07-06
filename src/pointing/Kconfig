@@ -4,7 +4,46 @@
 if ZMK_POINTING
 
 config ZMK_POINTER_2S_MIXER
-    bool "2 sensor mixer for pointing devices"
+    bool "2-sensor pointer mixer"
     default y
+    depends on INPUT
 
 endif
+
+if ZMK_POINTER_2S_MIXER
+
+config POINTER_2S_MIXER_LAZY_INIT
+  bool "Lazy init"
+  default n
+  help
+    Make all the calculations not on boot but on fist data event (useful to see logs)
+
+config POINTER_2S_MIXER_REMAINDER_TTL
+  int "X/Y float remainder TTL, msec"
+  default 16
+
+config POINTER_2S_MIXER_TWIST_REMAINDER_TTL
+  int "Scroll float remainder TTL, msec"
+  default 32
+
+config POINTER_2S_MIXER_TWIST_FILTER_TTL
+  int "Singular events in this timeframe (msec) will be filtered out"
+  default 250
+
+config POINTER_2S_MIXER_TWIST_NO_FILTER_THRES
+  int "Do not apply threshold filters this amount of msec after previous scroll event"
+  default 8
+
+config POINTER_2S_MIXER_DIRECTION_FILTER_EN
+  bool "Direction filter"
+  default y
+  help
+    First event in the opposite direction will be filtered out
+
+config POINTER_2S_MIXER_34_FILTER_EN
+  bool "3/4 filter"
+  default y
+  help
+    Filter out movement events where 3 out of 4 values are below threshold
+
+endif # ZMK_POINTER_2S_MIXER

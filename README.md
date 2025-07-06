@@ -28,8 +28,8 @@ manifest:
 ### 1. Include required headers
 
 ```c
-#include <dt-bindings/zmk/input_mixer.h>
-#include <input/processors/mixer.dtsi>
+#include <dt-bindings/zmk/p2sm.h>
+#include <input/processors/p2sm.dtsi>
 ```
 
 ### 2. Define the mixer device

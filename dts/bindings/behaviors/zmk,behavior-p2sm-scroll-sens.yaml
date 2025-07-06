@@ -1,0 +1,13 @@
+description: Scroll sensitivity
+compatible: "zmk,behavior-p2sm-scroll-sens"
+include: two_param.yaml
+
+properties:
+  step:
+    type: int
+    required: true
+    default: 400 # must be a factor of (max-multiplier * 1000); in percents
+  max-multiplier:
+    type: int
+    required: true
+    default: 2

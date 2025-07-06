@@ -1,13 +1,9 @@
-#include <zephyr/dt-bindings/input/input-event-codes.h>
-
 / {
     /omit-if-no-ref/ zip_2s_mixer: zip_2s_mixer {
         compatible = "zmk,pointer-2s-mixer";
         #input-processor-cells = <1>;
         sync-report-ms = <1>;
         sync-report-yaw-ms = <8>;
-        yaw-div = <4>;
-		yaw-mul = <1>;
 		yaw-interference-thres = <10>;
 		yaw-thres = <4>;
         sensor1-pos = [00 80 00];

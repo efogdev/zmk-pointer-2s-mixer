@@ -1,0 +1,18 @@
+/ {
+	behaviors {
+		p2sm_sens: p2sm_sens {
+			compatible = "zmk,behavior-p2sm-sens";
+			#binding-cells = <2>;
+			display-name = "Pointer sensitivity";
+			step = <125>;
+		};
+
+		p2sm_scroll_sens: p2sm_scroll_sens {
+			compatible = "zmk,behavior-p2sm-scroll-sens";
+			#binding-cells = <2>;
+			display-name = "Scroll sensitivity";
+			step = <400>;
+			max-multiplier = <2>;
+		};
+	};
+};

@@ -12,15 +12,6 @@ properties:
     required: true
     default: 8
 
-  yaw-div: # divisor
-    type: int
-    required: true
-    default: 16
-  yaw-mul: # multiplier
-    type: int
-    required: true
-    default: 1
-
   # CPI dependent! Smaller value = less interference
   yaw-interference-thres:
     type: int
@@ -33,7 +24,7 @@ properties:
     required: true
     default: 4
 
-  # zero = down left bottom (NOT BALL ORIGIN)
+  # zero = down left bottom (NOT BALL CENTER)
   sensor1-pos:
     type: uint8-array
     required: true
