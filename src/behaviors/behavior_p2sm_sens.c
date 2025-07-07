@@ -59,7 +59,7 @@ static const struct behavior_parameter_metadata_set metadata_sets[] = {profile_i
 static const struct behavior_parameter_metadata metadata = { .sets_len = ARRAY_SIZE(metadata_sets), .sets = metadata_sets};
 #endif
 
-static int p2sm_detect_drift(const char* dev_name, const float min, const float max) {
+static int p2sm_detect_drift(const char* dev_name, const float min) {
     const struct device *dev = zmk_behavior_get_binding(dev_name);
     if (dev == NULL) {
         LOG_ERR("Device not found!");
@@ -123,6 +123,7 @@ static float find_max_value(const char* dev_name) {
     return max_value;
 }
 
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct zmk_behavior_binding_event event) {
     const struct behavior_p2sm_sens_config *cfg = zmk_behavior_get_binding(binding->behavior_dev)->config;
     const float min_value = find_min_value(binding->behavior_dev);
@@ -131,7 +132,7 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
     const float current = cfg->scroll ?  p2sm_get_yaw_coef() : p2sm_get_move_coef();
     const int8_t steps = (int32_t) binding->param2;
 
-    if (p2sm_detect_drift(binding->behavior_dev, min_value, max_value)) {
+    if (p2sm_detect_drift(binding->behavior_dev, min_value)) {
         LOG_DBG("Cycling despite drift…");
     }
 
@@ -164,9 +165,7 @@ void p2sm_sens_driver_init() {
 
     for (int i = 0; i < MAX_DEVICES; i++) {
         if (g_devices[i] != NULL) {
-            const float min_value = find_min_value(g_devices[i]);
-            const float max_value = find_max_value(g_devices[i]);
-            p2sm_detect_drift(g_devices[i], min_value, max_value);
+            p2sm_detect_drift(g_devices[i], find_min_value(g_devices[i]));
         }
     }
 }

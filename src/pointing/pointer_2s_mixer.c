@@ -79,8 +79,8 @@ static int process_and_report(const struct device *dev) {
             data->rpt_y_remainder += rotated_y;
         }
 
-        data->yaw_s1_x += rotated_x;
-        data->yaw_s1_y += rotated_y;
+        data->yaw_s1_x += rotated_x / data->move_coef;
+        data->yaw_s1_y += rotated_y / data->move_coef;
         data->s1_x = 0;
         data->s1_y = 0;
     }
@@ -97,8 +97,8 @@ static int process_and_report(const struct device *dev) {
             data->rpt_y_remainder += rotated_y;
         }
 
-        data->yaw_s2_x += rotated_x;
-        data->yaw_s2_y += rotated_y;
+        data->yaw_s2_x += rotated_x / data->move_coef;
+        data->yaw_s2_y += rotated_y / data->move_coef;
         data->s2_x = 0;
         data->s2_y = 0;
     }
