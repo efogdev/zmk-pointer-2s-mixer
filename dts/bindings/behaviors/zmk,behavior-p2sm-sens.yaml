@@ -1,12 +1,24 @@
-description: Pointer sensitivity
+description: Sensor sensitivity
 compatible: "zmk,behavior-p2sm-sens"
 include: two_param.yaml
 
 properties:
-  # must be a factor of 1000: step = percents * 10
-  # valid values:
-  #   1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 125, 200, 250, 500
   step:
     type: int
     required: true
-    default: 125
+    default: 250 # must be a factor of (max-multiplier * 1000); step = percents * 10
+  min-step:
+    type: int
+    required: true
+    default: 1
+  max-step:
+    type: int
+    required: true
+    default: 1000
+
+  # for non-scroll behavior, max-multiplier is always 1
+  scroll:
+    type: boolean
+  max-multiplier:
+    type: int
+    default: 1 # one might need to disable high-res scroll for >1 to make sense

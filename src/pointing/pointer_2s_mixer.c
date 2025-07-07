@@ -6,6 +6,7 @@
 #include <dt-bindings/zmk/p2sm.h>
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
+#include "drivers/p2sm_runtime.h"
 
 #if IS_ENABLED(CONFIG_SETTINGS)
 #ifndef CONFIG_SETTINGS_RUNTIME
@@ -204,7 +205,7 @@ static float calculate_twist(const struct device *dev) {
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_34_FILTER_EN)
     if (total_under_thres == 3 && passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_INF("(%d, %d) (%d, %d): discarded twist (reason = 3_of_4_below_yaw_thres)", s1_x, s1_y, s2_x, s2_y);
+        LOG_DBG("(%d, %d) (%d, %d): discarded twist (reason = 3_of_4_below_yaw_thres)", s1_x, s1_y, s2_x, s2_y);
         return 0;
     }
 #endif
@@ -388,30 +389,26 @@ static int data_init(const struct device *dev) {
     data->yaw_coef = 1.0f;
 
 #if IS_ENABLED(CONFIG_SETTINGS)
-    if (settings_runtime_get("p2sm/move_coef", &data->move_coef, sizeof(float)) != 0) {
-        LOG_WRN("Can't load pointer sensitivity coefficient");
-    }
-
-    if (settings_runtime_get("p2sm/yaw_coef", &data->yaw_coef, sizeof(float)) != 0) {
-        LOG_WRN("Can't load scroll sensitivity coefficient");
-    }
+    // ToDo
 #endif
 
     // going >1 means losing precision
     // acceptable for scroll but not movement
-    if (data->move_coef > 1) {
-        data->move_coef = 1;
+    if (data->move_coef > 1.0f) {
+        data->move_coef = 1.0f;
     }
 
     LOG_INF("Sensor mixer driver initialized");
-    LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
-    LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
-    LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
-    LOG_DBG("  > Pointer sensitivity: %d%%", (int) (data->move_coef * 100));
-    LOG_DBG("  > Scroll sensitivity: %d%%", (int) (data->yaw_coef * 100));
+    LOG_INF("  > Ball radius: %d", (int) config->ball_radius);
+    LOG_INF("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
+    LOG_INF("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
+    LOG_INF("  > Pointer sensitivity: ~%d%%", (int) (data->move_coef * 100));
+    LOG_INF("  > Scroll sensitivity: ~%d%%", (int) (data->yaw_coef * 100));
 
     g_dev = (struct device *) dev;
     data->initialized = true;
+
+    p2sm_sens_driver_init();
     return 1;
 }
 
