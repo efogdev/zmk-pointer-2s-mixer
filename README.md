@@ -37,20 +37,16 @@ manifest:
 ```c
 &zip_2s_mixer {
     status = "okay";
-    sync-report-ms = <2>;
-    sync-report-yaw-ms = <8>;
-    ball-radius = <102>; // 24 to 127
-    
-    yaw-div = <4>; // divider
-    yaw-mul = <1>; // multiplier
+	sync-report-ms = <4>; 
+	sync-report-yaw-ms = <8>;
 
-    // CPI dependent values
-    yaw-interference-thres = <6>; // increase this value to descrease interference 
-    yaw-thres = <2>; // filters out minimal twist movement 
-    
-    // zero = left down bottom
-    sensor1-pos = [31 4B 2D]; // X, Y, Z (mapped to uint8_t)
-    sensor2-pos = [C1 3C 2D];
+	yaw-interference-thres = <24>; // CPI and sync-report-yaw-ms dependent
+	yaw-thres = <36>; // CPI and sync-report-yaw-ms dependent
+
+	// arbitrary bounding box (0, 0, 0) - (255, 255, 255)
+	ball-radius = <102>; // maximum = 127
+	sensor1-pos = [31 4B 2D];  // X Y Z
+	sensor2-pos = [C1 3C 2D];
 };
 ```
 
@@ -92,8 +88,6 @@ output_node {
 ## Example Usage
 
 See the [complete example](https://github.com/efogdev/trackball-zmk-config) in `efogtech_trackball_0.dts` board.
-
-![image](https://github.com/user-attachments/assets/86a2420e-6595-49a2-b843-836f6a7a4053)
 
 ## Kconfig Options
 
