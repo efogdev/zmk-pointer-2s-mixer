@@ -14,7 +14,7 @@ properties:
   max-step:
     type: int
     required: true
-    default: 1000
+    default: 1000 # 1000 effectively means "any number"
 
   # for non-scroll behavior, max-multiplier is always 1
   scroll:

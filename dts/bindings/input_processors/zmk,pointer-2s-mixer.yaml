@@ -12,19 +12,21 @@ properties:
     required: true
     default: 8
 
-  # CPI dependent! Smaller value = less interference
+  # CPI and sync-report-yaw-ms dependent!
+  # Smaller value = less interference
   yaw-interference-thres:
     type: int
     required: true
     default: 10
 
-  # CPI dependent! Filters out twist movements smaller than N points
+  # CPI and sync-report-yaw-ms dependent!
+  # Filters out twist movements smaller than N points
   yaw-thres:
     type: int
     required: true
     default: 4
 
-  # zero = down left bottom (NOT BALL CENTER)
+  # Zero = down left bottom (NOT BALL CENTER)
   sensor1-pos:
     type: uint8-array
     required: true

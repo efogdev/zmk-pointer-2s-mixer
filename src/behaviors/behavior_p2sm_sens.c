@@ -7,17 +7,18 @@
 #include "drivers/p2sm_runtime.h"
 #include "dt-bindings/zmk/p2sm.h"
 #include "zephyr/logging/log.h"
+#include "zephyr/settings/settings.h"
 #include "zmk/behavior.h"
 
 #define MAX_DEVICES 8
-#define CORRECTION_THRES 2 // %
 #define DT_DRV_COMPAT zmk_behavior_p2sm_sens
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
-typedef void (*p2sm_set_coef_t)(float coef);
 
+static bool initialized = false;
 static uint8_t g_dev_num = 0;
-static const char* g_devices[MAX_DEVICES] = {0};
+static const char* g_devices[MAX_DEVICES] = { NULL };
+static float g_from_settings[2] = { -1, -1 };
 
 struct behavior_p2sm_sens_config {
     uint32_t step;
@@ -73,8 +74,8 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
     }
 
     const float one_step = (float) cfg->step / 1000.0f;
-    if (one_step * 100.0f < (float) (CORRECTION_THRES * 10)) {
-        LOG_WRN("Drift correction is not possible, consider bigger steps.");
+    if (one_step * 100.0f < ((float) CONFIG_POINTER_2S_MIXER_SENS_DRIFT_CORRECTION) / 10.0f) {
+        LOG_WRN("Drift correction is not possible, consider bigger steps");
         return 0;
     }
 
@@ -82,11 +83,11 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
     const int steps_count = (int) (current * 1000.0f / cfg->step - 0.5f);
     const uint16_t d_drift = fabs(current - (float) steps_count * one_step) * 1000.0f;
 
-    LOG_DBG("  > Current: ~%d%% (%d step)", (int) (current * 100.0f), steps_count);
+    LOG_DBG("  > Now: ~%d%% (step_num=%d)", (int) (current * 100.0f), steps_count);
     LOG_DBG("  > Step: %d/1000", cfg->step);
     LOG_DBG("  > Drift: %d", cfg->step - d_drift);
 
-    if (cfg->step - d_drift > CORRECTION_THRES * 10) {
+    if (cfg->step - d_drift > CONFIG_POINTER_2S_MIXER_SENS_DRIFT_CORRECTION) {
         float closest = (float) (steps_count * cfg->step) / 1000.0f;
         if (closest < min) {
             closest = min;
@@ -161,13 +162,28 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
 }
 
 void p2sm_sens_driver_init() {
+    if (initialized) {
+        LOG_ERR("Sensitivity driver already initialized!");
+        return;
+    }
+
     LOG_INF("Initializing sensitivity cycling driver…");
+    if (g_from_settings[0] != -1 && g_from_settings[1] != -1) {
+        p2sm_set_move_coef(g_from_settings[0]);
+        p2sm_set_yaw_coef(g_from_settings[1]);
+    } else {
+        LOG_WRN("Sensitivity values not found in settings");
+    }
 
     for (int i = 0; i < MAX_DEVICES; i++) {
         if (g_devices[i] != NULL) {
             p2sm_detect_drift(g_devices[i], find_min_value(g_devices[i]));
+        } else {
+            LOG_WRN("Unexpected null device found, skipping");
         }
     }
+
+    initialized = true;
 }
 
 static int behavior_p2sm_sens_init(const struct device *dev) {
@@ -178,7 +194,7 @@ static int behavior_p2sm_sens_init(const struct device *dev) {
     }
 
     if (cfg->min_step >= cfg->max_step) {
-        LOG_ERR("Invalid configuration: max_step < min_step");
+        LOG_ERR("Invalid configuration: max_step ≤ min_step");
         return -1;
     }
 
@@ -206,5 +222,24 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
 
 DT_INST_FOREACH_STATUS_OKAY(P2SM_INST)
 
+#if IS_ENABLED(CONFIG_SETTINGS)
+// ReSharper disable once CppParameterMayBeConst
+static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
+    const int err = read_cb(cb_arg, g_from_settings, sizeof(g_from_settings));
+    if (err < 0) {
+        LOG_ERR("Failed to load settings (err = %d)", err);
+    }
+
+    if (initialized) {
+        LOG_WRN("Unexpected: settings loaded after driver initialization, drift will not be detected!");
+        p2sm_set_move_coef(g_from_settings[0]);
+        p2sm_set_yaw_coef(g_from_settings[1]);
+    }
+
+    return err;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(sensor_attr_cycle, P2SM_SETTINGS_PREFIX, NULL, p2sm_settings_load_cb, NULL, NULL);
+#endif
 
 #endif /* DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT) */

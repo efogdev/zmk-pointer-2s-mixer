@@ -6,3 +6,4 @@
 #
 
 rsource "src/pointing/Kconfig"
+rsource "src/behaviors/Kconfig"

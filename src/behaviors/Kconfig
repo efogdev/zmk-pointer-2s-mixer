@@ -1,0 +1,16 @@
+# Copyright (c) 2023 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+if ZMK_POINTER_2S_MIXER
+
+config POINTER_2S_MIXER_SENS_DRIFT_CORRECTION
+  int "Sensitivity drift correction threshold"
+  default 15
+  help
+    In percents * 10. Value of 15 represents correction of ≥1.5% drift
+
+config POINTER_2S_MIXER_SETTINGS_SAVE_DELAY
+  int "Debounce of the save operation, in milliseconds"
+  default 2500
+
+endif # ZMK_POINTER_2S_MIXER
