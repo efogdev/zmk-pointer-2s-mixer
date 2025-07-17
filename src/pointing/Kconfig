@@ -18,6 +18,16 @@ config POINTER_2S_MIXER_LAZY_INIT
   help
     Make all the calculations not on boot but on fist data event (useful to see logs)
 
+config POINTER_2S_MIXER_ENSURE_SYNC
+  bool "Ensure data from both sensors"
+  default y
+  help
+    Do not calculate anything until both sensor start to report data
+
+config POINTER_2S_MIXER_SYNC_WINDOW_MS
+  int "Data from both sensors must come in this window"
+  default 24
+
 config POINTER_2S_MIXER_REMAINDER_TTL
   int "X/Y float remainder TTL, msec"
   default 16

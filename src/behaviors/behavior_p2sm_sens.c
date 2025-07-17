@@ -60,6 +60,24 @@ static const struct behavior_parameter_metadata_set metadata_sets[] = {profile_i
 static const struct behavior_parameter_metadata metadata = { .sets_len = ARRAY_SIZE(metadata_sets), .sets = metadata_sets};
 #endif
 
+static char log_buf[64];
+static void loose_log_percents(const char* prefix, const float num, const bool debug) {
+    const int32_t int_part = (int32_t) (num * 100);
+    const int32_t frac_part = ((int32_t) (num * 100 * 100)) % 100;
+
+    if (frac_part != 0) {
+        sprintf(log_buf, "%s~%d.%d%%", prefix, int_part, frac_part);
+    } else {
+        sprintf(log_buf, "%s%d%%", prefix, int_part);
+    }
+
+    if (debug) {
+        LOG_DBG("%s", log_buf);
+    } else {
+        LOG_INF("%s", log_buf);
+    }
+}
+
 static int p2sm_detect_drift(const char* dev_name, const float min) {
     const struct device *dev = zmk_behavior_get_binding(dev_name);
     if (dev == NULL) {
@@ -83,8 +101,9 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
     const int steps_count = (int) (current * 1000.0f / cfg->step - 0.5f);
     const uint16_t d_drift = fabs(current - (float) steps_count * one_step) * 1000.0f;
 
-    LOG_DBG("  > Now: ~%d%% (step_num=%d)", (int) (current * 100.0f), steps_count);
-    LOG_DBG("  > Step: %d/1000", cfg->step);
+    loose_log_percents("  > Now: ", current, true);
+    LOG_DBG("  > Current step: %d", steps_count);
+    LOG_DBG("  > Step size: %d/%d", cfg->step, cfg->max_multiplier * 1000);
     LOG_DBG("  > Drift: %d", cfg->step - d_drift);
 
     if (cfg->step - d_drift > CONFIG_POINTER_2S_MIXER_SENS_DRIFT_CORRECTION) {
@@ -93,7 +112,9 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
             closest = min;
         }
 
-        LOG_WRN("Sensitivity drift detected! Setting to the closest correct value: ~%d%%", (int) (closest * 100.0f));
+        LOG_WRN("Sensitivity drift detected!");
+        loose_log_percents("Setting to the closest correct value: ", closest, false);
+
         if (cfg->scroll) {
             p2sm_set_yaw_coef(closest);
         } else {
@@ -147,10 +168,12 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
     }
 
     if (direction) {
-        LOG_INF("Sensitivity increased by %d step(s), currently at ~%d%%", steps, (int) (new_val * 100.0f));
+        LOG_DBG("Sensitivity increased by %d step(s)", steps);
     } else {
-        LOG_INF("Sensitivity decreased by %d step(s), currently at ~%d%%", steps, (int) (new_val * 100.0f));
+        LOG_DBG("Sensitivity decreased by %d step(s)", steps);
     }
+
+    loose_log_percents("New sensitivity: ", new_val, false);
 
     if (cfg->scroll) {
         p2sm_set_yaw_coef(new_val);
@@ -178,8 +201,6 @@ void p2sm_sens_driver_init() {
     for (int i = 0; i < MAX_DEVICES; i++) {
         if (g_devices[i] != NULL) {
             p2sm_detect_drift(g_devices[i], find_min_value(g_devices[i]));
-        } else {
-            LOG_WRN("Unexpected null device found, skipping");
         }
     }
 

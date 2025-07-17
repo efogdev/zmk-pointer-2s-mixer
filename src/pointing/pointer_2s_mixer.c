@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <drivers/input_processor.h>
@@ -20,6 +21,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static struct device *g_dev = NULL;
 static void twist_filter_cleanup_work_cb(struct k_work *work);
+
+#if CONFIG_LOG_MAX_LEVEL >= 4
+static char log_buf[32];
+#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
 struct k_work_delayable save_work;
@@ -51,14 +56,18 @@ struct zip_pointer_2s_mixer_data {
     float rpt_x_remainder, rpt_y_remainder, rpt_yaw_remainder;
     float move_coef, yaw_coef;
 
-    // accumulates transformed X, Y movements for different purposes
-    struct p2sm_dataframe values, yaw_values;
+    // accumulates NON-transformed X, Y movements
+    struct p2sm_dataframe values;
+
+    // accumulates transformed X, Y movements
+    struct p2sm_dataframe yaw_values;
 
     // pre-calculated
     float sensor1_surface_x, sensor1_surface_y, sensor1_surface_z;
     float sensor2_surface_x, sensor2_surface_y, sensor2_surface_z;
     float rotation_matrix1[3][3], rotation_matrix2[3][3];
 
+    int64_t last_sensor1_report, last_sensor2_report;
     int64_t last_twist; // to filter out single events as they are probably accidental
     int8_t last_twist_direction; // to filter out first event in the opposite direction
 };
@@ -72,6 +81,10 @@ struct twist_detection {
 static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
+
+#if CONFIG_LOG_MAX_LEVEL >= 4
+static int float_to_str(float value, int precision, char *buffer);
+#endif
 
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
@@ -273,19 +286,23 @@ static float calculate_twist(const struct device *dev) {
         }
 #endif
 
-        // ToDo sqrt?
-        const float result = (i % 2 == 0) ? -(float)(t->val1 - t->val2) : (float)(t->val2 - t->val1);
+        const float result = t->direction ? -(float)(t->val1 - t->val2) : (float)(t->val2 - t->val1);
         LOG_DBG("Scroll value calculated: %d", (int) result);
 
         data->last_twist = now;
         data->last_twist_direction = t->direction;
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
         k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
+#endif
+
         return result;
     }
 
     return 0;
 }
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
 static void twist_filter_cleanup_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     const struct zip_pointer_2s_mixer_data *dwork_data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_filter_cleanup_work);
@@ -295,6 +312,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
     data->last_twist_direction = -1;
     LOG_DBG("Direction filter data discarded (timeout)");
 }
+#endif
 
 static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
     const float distance = sqrtf(x*x + y*y + z*z);
@@ -313,6 +331,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                            uint32_t param2, struct zmk_input_processor_state *state) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
+    const int64_t now = k_uptime_get();
 
     if (!data->initialized) {
         if (!data_init(dev)) {
@@ -321,16 +340,20 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         }
     }
 
-    if (event->code == INPUT_REL_X) {
-        if (param1 & INPUT_MIXER_SENSOR1) {
+    if (param1 & INPUT_MIXER_SENSOR1) {
+        data->last_sensor1_report = now;
+
+        if (event->code == INPUT_REL_X) {
             data->values.s1_x += event->value;
-        } else {
-            data->values.s2_x += event->value;
-        }
-    } else if (event->code == INPUT_REL_Y) {
-        if (param1 & INPUT_MIXER_SENSOR1) {
+        } else if (event->code == INPUT_REL_Y) {
             data->values.s1_y += event->value;
-        } else {
+        }
+    } else {
+        data->last_sensor2_report = now;
+
+        if (event->code == INPUT_REL_X) {
+            data->values.s2_x += event->value;
+        } else if (event->code == INPUT_REL_Y) {
             data->values.s2_y += event->value;
         }
     }
@@ -338,7 +361,14 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     event->value = 0;
     event->sync = false;
 
-    const int64_t now = k_uptime_get();
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
+    if (abs((int32_t) (data->last_sensor1_report - data->last_sensor2_report)) > CONFIG_POINTER_2S_MIXER_SYNC_WINDOW_MS) {
+        memset(&data->values, 0, sizeof(struct p2sm_dataframe));
+        memset(&data->yaw_values, 0, sizeof(struct p2sm_dataframe));
+        return 0;
+    }
+#endif
+
     if (now - data->last_rpt_time > config->sync_report_ms) {
         process_and_report(dev);
     }
@@ -443,14 +473,23 @@ static int data_init(const struct device *dev) {
     LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
     LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
     LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
-    LOG_INF("  > Pointer sensitivity: ~%d%%", (int) (data->move_coef * 100));
-    LOG_INF("  > Scroll sensitivity: ~%d%%", (int) (data->yaw_coef * 100));
+
+#if CONFIG_LOG_MAX_LEVEL >= 4
+    float_to_str(data->move_coef * 100, 2, log_buf);
+    LOG_DBG("  > Pointer sensitivity: %s%%", log_buf);
+
+    float_to_str(data->yaw_coef * 100, 2, log_buf);
+    LOG_DBG("  > Scroll sensitivity: %s%%", log_buf);
+#endif
 
     g_dev = (struct device *) dev;
     data->initialized = true;
 
     p2sm_sens_driver_init();
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
     k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
+#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     k_work_init_delayable(&save_work, save_work_cb);
@@ -458,6 +497,33 @@ static int data_init(const struct device *dev) {
 
     return 1;
 }
+
+#if CONFIG_LOG_MAX_LEVEL >= 4
+static int float_to_str(const float value, int precision, char *buffer) {
+    int int_part = (int)value;
+    float decimal_part = value - int_part;
+
+    if (value < 0 && decimal_part != 0) {
+        int_part = -int_part;
+        decimal_part = -decimal_part;
+        *buffer++ = '-';
+    }
+
+    int len = snprintf(buffer, 16, "%d", int_part);
+    buffer += len;
+    *buffer++ = '.';
+
+    for (int i = 0; i < precision; i++) {
+        decimal_part *= 10;
+        const int digit = (int) decimal_part;
+        *buffer++ = '0' + digit;
+        decimal_part -= digit;
+    }
+
+    *buffer = '\0';
+    return len + precision + 1;
+}
+#endif
 
 static struct zmk_input_processor_driver_api sy_driver_api = {
     .handle_event = sy_handle_event,
@@ -472,7 +538,7 @@ static void save_work_cb(struct k_work *work) {
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     } else {
-        LOG_INF("Sensitivity settings saved");
+        LOG_DBG("Sensitivity settings saved");
     }
 }
 
