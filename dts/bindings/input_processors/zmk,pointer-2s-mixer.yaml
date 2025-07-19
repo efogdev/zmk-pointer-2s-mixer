@@ -7,21 +7,21 @@ properties:
     type: int
     required: true
     default: 2
-  sync-report-yaw-ms:
+  sync-scroll-report-ms:
     type: int
     required: true
     default: 8
 
-  # CPI and sync-report-yaw-ms dependent!
+  # CPI and sync-scroll-report-ms dependent!
   # Smaller value = less interference
-  yaw-interference-thres:
+  twist-interference-thres:
     type: int
     required: true
     default: 10
 
-  # CPI and sync-report-yaw-ms dependent!
+  # CPI and sync-scroll-report-ms dependent!
   # Filters out twist movements smaller than N points
-  yaw-thres:
+  twist-thres:
     type: int
     required: true
     default: 4
@@ -39,3 +39,12 @@ properties:
     type: int
     required: true
     default: 120
+
+  feedback-gpios:
+    type: phandle-array
+  twist-feedback-threshold:
+    type: int
+    default: 100
+  twist-feedback-duration:
+    type: int
+    default: 50

@@ -22,3 +22,9 @@ properties:
   max-multiplier:
     type: int
     default: 1 # one might need to disable high-res scroll for >1 to make sense
+
+  feedback-gpios:
+    type: phandle-array
+  feedback-duration:
+    type: int
+    default: 0

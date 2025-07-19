@@ -8,6 +8,7 @@
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
 #include "drivers/p2sm_runtime.h"
+#include "zephyr/drivers/gpio.h"
 
 #if IS_ENABLED(CONFIG_SETTINGS)
 #ifndef CONFIG_SETTINGS_RUNTIME
@@ -21,9 +22,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static struct device *g_dev = NULL;
 static void twist_filter_cleanup_work_cb(struct k_work *work);
+static void twist_feedback_off_work_cb(struct k_work *work);
 
 #if CONFIG_LOG_MAX_LEVEL >= 4
-static char log_buf[32];
+static char log_buf[12];
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
@@ -32,13 +34,17 @@ static void save_work_cb(struct k_work *work);
 #endif
 
 struct zip_pointer_2s_mixer_config {
-    uint32_t sync_report_ms, sync_report_yaw_ms;
-    uint32_t yaw_interference_thres; // in sensor points, CPI dependent
-    uint32_t yaw_thres; // in sensor points, CPI dependent
-    uint32_t ball_radius;
+    const uint32_t sync_report_ms, sync_scroll_report_ms;
+    const uint32_t twist_interference_thres; // in sensor points, CPI dependent
+    const uint32_t twist_thres; // in sensor points, CPI dependent
+    const uint32_t ball_radius;
 
     // zero (origin) = down left bottom, not the ball center
-    uint8_t sensor1_pos[3], sensor2_pos[3];
+    const uint8_t sensor1_pos[3], sensor2_pos[3];
+
+    // feedback
+    const struct gpio_dt_spec feedback_gpios;
+    const uint32_t twist_feedback_duration, twist_feedback_threshold;
 };
 
 struct p2sm_dataframe {
@@ -48,34 +54,35 @@ struct p2sm_dataframe {
 // origin = ball center
 struct zip_pointer_2s_mixer_data {
     const struct device *dev;
-    struct k_work_delayable twist_filter_cleanup_work;
+    struct k_work_delayable twist_filter_cleanup_work, twist_feedback_off_work;
 
     bool initialized;
-    int64_t last_rpt_time, last_rpt_time_yaw;
+    int64_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
-    float rpt_x_remainder, rpt_y_remainder, rpt_yaw_remainder;
-    float move_coef, yaw_coef;
+    float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
+    float move_coef, twist_coef;
 
     // accumulates NON-transformed X, Y movements
     struct p2sm_dataframe values;
 
     // accumulates transformed X, Y movements
-    struct p2sm_dataframe yaw_values;
+    struct p2sm_dataframe twist_values;
 
     // pre-calculated
     float sensor1_surface_x, sensor1_surface_y, sensor1_surface_z;
     float sensor2_surface_x, sensor2_surface_y, sensor2_surface_z;
     float rotation_matrix1[3][3], rotation_matrix2[3][3];
 
-    int64_t last_sensor1_report, last_sensor2_report;
+    int64_t last_sensor1_report, last_sensor2_report; // to ensure sync
     int64_t last_twist; // to filter out single events as they are probably accidental
     int8_t last_twist_direction; // to filter out first event in the opposite direction
+    uint32_t twist_accumulator; // for feedback
 };
 
 struct twist_detection {
-    int16_t val1;
-    int16_t val2;
-    bool direction;
+    const int16_t val1;
+    const int16_t val2;
+    const bool direction;
 };
 
 static int data_init(const struct device *dev);
@@ -104,8 +111,8 @@ static int process_and_report(const struct device *dev) {
             data->rpt_y_remainder += rotated_y;
         }
 
-        data->yaw_values.s1_x += rotated_x / data->move_coef;
-        data->yaw_values.s1_y += rotated_y / data->move_coef;
+        data->twist_values.s1_x += rotated_x / data->move_coef;
+        data->twist_values.s1_y += rotated_y / data->move_coef;
         data->values.s1_x = 0;
         data->values.s1_y = 0;
     }
@@ -122,8 +129,8 @@ static int process_and_report(const struct device *dev) {
             data->rpt_y_remainder += rotated_y;
         }
 
-        data->yaw_values.s2_x += rotated_x / data->move_coef;
-        data->yaw_values.s2_y += rotated_y / data->move_coef;
+        data->twist_values.s2_x += rotated_x / data->move_coef;
+        data->twist_values.s2_y += rotated_y / data->move_coef;
         data->values.s2_x = 0;
         data->values.s2_y = 0;
     }
@@ -206,48 +213,48 @@ static float calculate_twist(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const int64_t now = k_uptime_get();
     const int64_t passed = now - data->last_twist;
-    const int16_t s1_x = data->yaw_values.s1_x;
-    const int16_t s1_y = data->yaw_values.s1_y;
-    const int16_t s2_x = data->yaw_values.s2_x;
-    const int16_t s2_y = data->yaw_values.s2_y;
-    memset(&data->yaw_values, 0, sizeof(data->yaw_values));
+    const int16_t s1_x = data->twist_values.s1_x;
+    const int16_t s1_y = data->twist_values.s1_y;
+    const int16_t s2_x = data->twist_values.s2_x;
+    const int16_t s2_y = data->twist_values.s2_y;
+    memset(&data->twist_values, 0, sizeof(data->twist_values));
 
     if (s1_x == 0 && s1_y == 0 && s2_x == 0 && s2_y == 0) {
         return 0;
     }
 
     uint8_t total_under_thres = 0;
-    total_under_thres += abs(s1_x) < config->yaw_thres;
-    total_under_thres += abs(s1_y) < config->yaw_thres;
-    total_under_thres += abs(s2_x) < config->yaw_thres;
-    total_under_thres += abs(s2_y) < config->yaw_thres;
+    total_under_thres += abs(s1_x) < config->twist_thres;
+    total_under_thres += abs(s1_y) < config->twist_thres;
+    total_under_thres += abs(s2_x) < config->twist_thres;
+    total_under_thres += abs(s2_y) < config->twist_thres;
     
     LOG_DBG("Analyzing movement: (%d, %d) (%d, %d)", s1_x, s1_y, s2_x, s2_y);
     if (total_under_thres == 4 && passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_DBG("Discarded movement (reason = yaw_thres)");
+        LOG_DBG("Discarded movement (reason = twist_thres)");
         return 0;
     }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_34_FILTER_EN)
     if (total_under_thres == 3 && passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_DBG("Discarded movement (reason = 3_of_4_below_yaw_thres)");
+        LOG_DBG("Discarded movement (reason = 3_of_4_below_twist_thres)");
         return 0;
     }
 #endif
 
     const int16_t x = abs(s1_x + s2_x);
     const int16_t y = abs(s1_y + s2_y);
-    if (x > config->yaw_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL ||
-        y > config->yaw_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL) {
+    if (x > config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL ||
+        y > config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL) {
         data->last_twist_direction = -1;
         data->last_twist = 0;
         LOG_DBG("Discarded movement (reason = significant_translation), filters reapplied");
         return 0;
     }
 
-    if ((x > config->yaw_interference_thres || y > config->yaw_interference_thres) &&
+    if ((x > config->twist_interference_thres || y > config->twist_interference_thres) &&
         passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_DBG("Discarded twist (reason = yaw_interference_thres)");
+        LOG_DBG("Discarded twist (reason = twist_interference_thres)");
         return 0;
     }
 
@@ -268,7 +275,7 @@ static float calculate_twist(const struct device *dev) {
 
     for (int i = 0; i < 4; i++) {
         const struct twist_detection *t = &twist_scenarios[i];
-        const int16_t threshold = config->yaw_interference_thres;
+        const int16_t threshold = config->twist_interference_thres;
 
         const bool condition = (i % 2 == 0)
             ? (t->val1 > threshold && t->val2 < -threshold)
@@ -327,8 +334,8 @@ static int line_sphere_intersection(const float r, const float x, const float y,
     return 1;
 }
 
-static int sy_handle_event(const struct device *dev, struct input_event *event, const uint32_t param1,
-                           uint32_t param2, struct zmk_input_processor_state *state) {
+static int sy_handle_event(const struct device *dev, struct input_event *event, const uint32_t p1,
+                           const uint32_t p2, struct zmk_input_processor_state *s) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const int64_t now = k_uptime_get();
@@ -340,7 +347,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         }
     }
 
-    if (param1 & INPUT_MIXER_SENSOR1) {
+    if (p1 & INPUT_MIXER_SENSOR1) {
         data->last_sensor1_report = now;
 
         if (event->code == INPUT_REL_X) {
@@ -364,7 +371,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     if (abs((int32_t) (data->last_sensor1_report - data->last_sensor2_report)) > CONFIG_POINTER_2S_MIXER_SYNC_WINDOW_MS) {
         memset(&data->values, 0, sizeof(struct p2sm_dataframe));
-        memset(&data->yaw_values, 0, sizeof(struct p2sm_dataframe));
+        memset(&data->twist_values, 0, sizeof(struct p2sm_dataframe));
         return 0;
     }
 #endif
@@ -373,21 +380,36 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         process_and_report(dev);
     }
 
-    if (now - data->last_rpt_time_yaw > config->sync_report_yaw_ms) {
-        const float yaw_float = calculate_twist(dev) * data->yaw_coef;
-        if (now - data->last_rpt_time_yaw > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
-            data->rpt_yaw_remainder = yaw_float;
+    if (now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
+        const float twist_float = calculate_twist(dev) * data->twist_coef;
+        if (now - data->last_rpt_time_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
+            data->rpt_twist_remainder = twist_float;
         } else {
-            data->rpt_yaw_remainder += yaw_float;
+            data->rpt_twist_remainder += twist_float;
         }
 
-        const int16_t yaw_int = (int16_t)data->rpt_yaw_remainder;
-        data->rpt_yaw_remainder -= yaw_int;
-        if (yaw_int != 0) {
-            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, yaw_int, true, K_NO_WAIT);
+        const int16_t twist_int = (int16_t)data->rpt_twist_remainder;
+        data->rpt_twist_remainder -= twist_int;
+        data->twist_accumulator += abs(twist_int);
+
+        if (twist_int != 0) {
+            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
         }
 
-        data->last_rpt_time_yaw = now;
+        if (config->feedback_gpios.port != NULL &&
+            data->twist_accumulator >= config->twist_feedback_threshold &&
+            config->twist_feedback_threshold > 0) {
+            data->twist_accumulator = 0;
+
+            if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
+                k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
+                LOG_DBG("Twist feedback activated (accumulator: %d)", data->twist_accumulator);
+            } else {
+                LOG_ERR("Failed to set twist feedback GPIO");
+            }
+        }
+
+        data->last_rpt_time_twist = now;
     }
 
     return 0;
@@ -461,7 +483,7 @@ static int data_init(const struct device *dev) {
 
     data->last_twist_direction = -1;
     data->move_coef = 1.0f;
-    data->yaw_coef = 1.0f;
+    data->twist_coef = 1.0f;
 
     // going >1 means losing precision
     // acceptable for scroll but not movement
@@ -478,9 +500,19 @@ static int data_init(const struct device *dev) {
     float_to_str(data->move_coef * 100, 2, log_buf);
     LOG_DBG("  > Pointer sensitivity: %s%%", log_buf);
 
-    float_to_str(data->yaw_coef * 100, 2, log_buf);
+    float_to_str(data->twist_coef * 100, 2, log_buf);
     LOG_DBG("  > Scroll sensitivity: %s%%", log_buf);
 #endif
+
+    if (config->feedback_gpios.port != NULL) {
+        if (gpio_pin_configure_dt(&config->feedback_gpios, GPIO_OUTPUT) != 0) {
+            LOG_WRN("Failed to configure twist feedback GPIO");
+        } else {
+            LOG_DBG("Twist feedback GPIO configured");
+        }
+    } else {
+        LOG_DBG("No feedback set up for twist");
+    }
 
     g_dev = (struct device *) dev;
     data->initialized = true;
@@ -495,7 +527,18 @@ static int data_init(const struct device *dev) {
     k_work_init_delayable(&save_work, save_work_cb);
 #endif
 
+    k_work_init_delayable(&data->twist_feedback_off_work, twist_feedback_off_work_cb);
     return 1;
+}
+
+static void twist_feedback_off_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    const struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_off_work);
+    const struct device *dev = data->dev;
+    const struct zip_pointer_2s_mixer_config *config = dev->config;
+
+    gpio_pin_set_dt(&config->feedback_gpios, 0);
+    LOG_DBG("Twist feedback turned off");
 }
 
 #if CONFIG_LOG_MAX_LEVEL >= 4
@@ -532,7 +575,7 @@ static struct zmk_input_processor_driver_api sy_driver_api = {
 #if IS_ENABLED(CONFIG_SETTINGS)
 static void save_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    const float values[2] = { data->move_coef, data->yaw_coef };
+    const float values[2] = { data->move_coef, data->twist_coef };
 
     const int err = settings_save_one(P2SM_SETTINGS_PREFIX, values, sizeof(values));
     if (err < 0) {
@@ -557,14 +600,14 @@ float p2sm_get_move_coef() {
     return data->move_coef;
 }
 
-float p2sm_get_yaw_coef() {
+float p2sm_get_twist_coef() {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");
         return 0;
     }
 
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->yaw_coef;
+    return data->twist_coef;
 }
 
 void p2sm_set_move_coef(const float coef) {
@@ -581,14 +624,14 @@ void p2sm_set_move_coef(const float coef) {
 #endif
 }
 
-void p2sm_set_yaw_coef(const float coef) {
+void p2sm_set_twist_coef(const float coef) {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");
         return;
     }
 
     struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    data->yaw_coef = coef;
+    data->twist_coef = coef;
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     p2sm_save_sensitivity();
@@ -598,11 +641,14 @@ void p2sm_set_yaw_coef(const float coef) {
 static struct zip_pointer_2s_mixer_data data = {};
 static struct zip_pointer_2s_mixer_config config = {
     .sync_report_ms = DT_INST_PROP(0, sync_report_ms),
-    .sync_report_yaw_ms = DT_INST_PROP(0, sync_report_yaw_ms),
-    .yaw_interference_thres = DT_INST_PROP(0, yaw_interference_thres),
-    .yaw_thres = DT_INST_PROP(0, yaw_thres),
+    .sync_scroll_report_ms = DT_INST_PROP(0, sync_scroll_report_ms),
+    .twist_interference_thres = DT_INST_PROP(0, twist_interference_thres),
+    .twist_thres = DT_INST_PROP(0, twist_thres),
     .sensor1_pos = DT_INST_PROP(0, sensor1_pos),
     .sensor2_pos = DT_INST_PROP(0, sensor2_pos),
     .ball_radius = DT_INST_PROP(0, ball_radius),
-};                                                                                             
+    .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(0, feedback_gpios, { .port = NULL }),
+    .twist_feedback_duration = DT_INST_PROP(0, twist_feedback_duration),
+    .twist_feedback_threshold = DT_INST_PROP(0, twist_feedback_threshold),
+};
 DEVICE_DT_INST_DEFINE(0, &sy_init, NULL, &data, &config, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &sy_driver_api);
