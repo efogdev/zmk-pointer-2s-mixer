@@ -1,5 +1,6 @@
 / {
 	behaviors {
+		// 12.5% step
 		/omit-if-no-ref/ p2sm_sensitivity: p2sm_sensitivity {
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
@@ -9,6 +10,7 @@
 			max-step = <1000>; // 1000 is effectively equivalent to "any"
 		};
 
+		// 25% step; scroll
 		/omit-if-no-ref/ p2sm_scroll_sensitivity: p2sm_scroll_sensitivity {
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
@@ -22,7 +24,9 @@
 
 		// example of sensitivity toggle option
 		/omit-if-no-ref/ p2sm_sens_toggle: p2sm_sens_toggle {
+			// will need "okay" somewhere to reuse this behavior instance
 			status = "disabled";
+
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
 			feedback-duration = <250>;

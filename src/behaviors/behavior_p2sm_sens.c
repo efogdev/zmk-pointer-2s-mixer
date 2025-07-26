@@ -11,14 +11,13 @@
 #include "zephyr/settings/settings.h"
 #include "zmk/behavior.h"
 
-#define MAX_DEVICES 8
 #define DT_DRV_COMPAT zmk_behavior_p2sm_sens
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
 static bool initialized = false;
 static uint8_t g_dev_num = 0;
-static const char* g_devices[MAX_DEVICES] = { NULL };
+static const char* g_devices[CONFIG_POINTER_2S_MIXER_SENS_MAX_DEVICES] = { NULL };
 static float g_from_settings[2] = { -1, -1 };
 
 struct behavior_p2sm_sens_config {
@@ -70,8 +69,9 @@ static const struct behavior_parameter_metadata_set metadata_sets[] = {profile_i
 static const struct behavior_parameter_metadata metadata = { .sets_len = ARRAY_SIZE(metadata_sets), .sets = metadata_sets};
 #endif
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
 static char log_buf[64];
-static void loose_log_percents(const char* prefix, const float num, const bool debug) {
+static void log_sensitivity(const char* prefix, const float num, const bool debug) {
     const int32_t int_part = (int32_t) (num * 100);
     const int32_t frac_part = (int32_t) (num * 100 * 100) % 100;
 
@@ -87,6 +87,7 @@ static void loose_log_percents(const char* prefix, const float num, const bool d
         LOG_INF("%s", log_buf);
     }
 }
+#endif
 
 static int p2sm_detect_drift(const char* dev_name, const float min) {
     const struct device *dev = zmk_behavior_get_binding(dev_name);
@@ -111,10 +112,12 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
     const int steps_count = (int) (current * 1000.0f / cfg->step - .5f);
     const uint16_t d_drift = fabs(current - (float) steps_count * one_step) * 1000.0f;
 
-    loose_log_percents("  > Now: ", current, true);
-    LOG_DBG("  > Current step: %d", steps_count);
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
+    log_sensitivity("  > Now: ", current, true);
+    LOG_DBG("  > Current step: %d", steps_count + 1);
     LOG_DBG("  > Step size: %d/%d", cfg->step, cfg->max_multiplier * 1000);
     LOG_DBG("  > Drift: %d", cfg->step - d_drift);
+#endif
 
     if (cfg->step - d_drift > CONFIG_POINTER_2S_MIXER_SENS_DRIFT_CORRECTION) {
         float closest = (float) (steps_count * cfg->step) / 1000.0f;
@@ -122,8 +125,10 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
             closest = min;
         }
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
         LOG_WRN("Sensitivity drift detected!");
-        loose_log_percents("Setting to the closest correct value: ", closest, false);
+        log_sensitivity("Setting to the closest correct value: ", closest, false);
+#endif
 
         if (cfg->scroll) {
             p2sm_set_twist_coef(closest);
@@ -164,12 +169,12 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
     const float min_value = find_min_value(binding->behavior_dev);
     const float max_value = find_max_value(binding->behavior_dev);
     const bool direction = binding->param1 & P2SM_INC;
-    const int8_t steps = (int32_t) binding->param2;
-    float current = cfg->scroll ?  p2sm_get_twist_coef() : p2sm_get_move_coef();
+    const int8_t steps = binding->param2 != 0 ? (int32_t) binding->param2 : 1;
+    float current = cfg->scroll ? p2sm_get_twist_coef() : p2sm_get_move_coef();
 
     if (p2sm_detect_drift(binding->behavior_dev, min_value)) {
         LOG_DBG("Cycling despite drift…");
-        current = cfg->scroll ?  p2sm_get_twist_coef() : p2sm_get_move_coef();
+        current = cfg->scroll ? p2sm_get_twist_coef() : p2sm_get_move_coef();
     }
 
     float new_val = current + (float) cfg->step * (float) steps / 1000.0f * (direction ? 1.0f : -1.0f);
@@ -186,13 +191,10 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
         new_val = max_value;
     }
 
-    if (direction) {
-        LOG_DBG("Sensitivity increased by %d step(s)", steps);
-    } else {
-        LOG_DBG("Sensitivity decreased by %d step(s)", steps);
-    }
-
-    loose_log_percents("New sensitivity: ", new_val, false);
+    LOG_DBG("Sensitivity %s by %d step(s)", direction ? "increased" : "decreased", steps);
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
+    log_sensitivity(cfg->scroll ? "Scroll sensitivity: " : "Pointer sensitivity: ", new_val, false);
+#endif
 
     if (cfg->scroll) {
         p2sm_set_twist_coef(new_val);
@@ -236,7 +238,7 @@ void p2sm_sens_driver_init() {
         LOG_WRN("Sensitivity values not found in settings");
     }
 
-    for (int i = 0; i < MAX_DEVICES; i++) {
+    for (int i = 0; i < CONFIG_POINTER_2S_MIXER_SENS_MAX_DEVICES; i++) {
         if (g_devices[i] != NULL) {
             p2sm_detect_drift(g_devices[i], find_min_value(g_devices[i]));
         }

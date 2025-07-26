@@ -4,10 +4,5 @@
         #input-processor-cells = <1>;
         sync-report-ms = <1>;
         sync-scroll-report-ms = <8>;
-		twist-interference-thres = <10>;
-		twist-thres = <4>;
-        sensor1-pos = [00 80 00];
-        sensor2-pos = [ff 80 00];
-        ball-radius = <100>;
     };
 };

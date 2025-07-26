@@ -1,6 +1,3 @@
-# Copyright (c) 2023 The ZMK Contributors
-# SPDX-License-Identifier: MIT
-
 if ZMK_POINTING
 
 config ZMK_POINTER_2S_MIXER
@@ -22,27 +19,33 @@ config POINTER_2S_MIXER_ENSURE_SYNC
   bool "Ensure data from both sensors"
   default y
   help
-    Do not calculate anything until both sensor start to report data
+    Do not calculate anything until both sensors start to report data
 
 config POINTER_2S_MIXER_SYNC_WINDOW_MS
-  int "Data from both sensors must come in this window"
+  int "Sync window, msec"
   default 24
+  help
+    Data from both sensors must come in this window
 
 config POINTER_2S_MIXER_REMAINDER_TTL
-  int "X/Y float remainder TTL, msec"
+  int "X/Y remainder TTL, msec"
   default 16
 
 config POINTER_2S_MIXER_TWIST_REMAINDER_TTL
-  int "Scroll float remainder TTL, msec"
+  int "Scroll remainder TTL, msec"
   default 32
 
 config POINTER_2S_MIXER_TWIST_FILTER_TTL
-  int "Singular events in this timeframe (msec) will be filtered out"
+  int "Time filter window, msec"
   default 250
+  help
+    Singular events in this timeframe (msec) will be filtered out
 
 config POINTER_2S_MIXER_TWIST_NO_FILTER_THRES
-  int "Do not apply threshold filters this amount of msec after previous scroll event"
+  int "No-filter mode duration, msec"
   default 12
+  help
+    Do not apply threshold filters this amount of msec after previous scroll event
 
 config POINTER_2S_MIXER_DIRECTION_FILTER_EN
   bool "Direction filter"
@@ -51,7 +54,7 @@ config POINTER_2S_MIXER_DIRECTION_FILTER_EN
     First event in the opposite direction will be filtered out
 
 config POINTER_2S_MIXER_DIRECTION_FILTER_TTL
-    int "Direction filter value TTL, milliseconds"
+    int "Direction filter value TTL, msec"
     default 500
 
 config POINTER_2S_MIXER_34_FILTER_EN
@@ -65,5 +68,9 @@ config POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL
   default 4
   help
     Helps filtering by discarding significant movement early. Keep in range 2-10
+
+config POINTER_2S_MIXER_FEEDBACK_EN
+  bool "Enable feedback"
+  default y
 
 endif # ZMK_POINTER_2S_MIXER

@@ -22,10 +22,9 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static struct device *g_dev = NULL;
 static void twist_filter_cleanup_work_cb(struct k_work *work);
-static void twist_feedback_off_work_cb(struct k_work *work);
 
-#if CONFIG_LOG_MAX_LEVEL >= 4
-static char log_buf[12];
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+static void twist_feedback_off_work_cb(struct k_work *work);
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
@@ -35,16 +34,16 @@ static void save_work_cb(struct k_work *work);
 
 struct zip_pointer_2s_mixer_config {
     const uint32_t sync_report_ms, sync_scroll_report_ms;
-    const uint32_t twist_interference_thres; // in sensor points, CPI dependent
-    const uint32_t twist_thres; // in sensor points, CPI dependent
-    const uint32_t ball_radius;
+    const uint16_t twist_interference_thres; // CPI and sync dependent
+    const uint16_t twist_thres; // CPI and sync dependent
+    const uint8_t ball_radius; // up to 127
 
     // zero (origin) = down left bottom, not the ball center
     const uint8_t sensor1_pos[3], sensor2_pos[3];
 
-    // feedback
+    // feedback (i.e. vibration)
     const struct gpio_dt_spec feedback_gpios;
-    const uint32_t twist_feedback_duration, twist_feedback_threshold;
+    const uint16_t twist_feedback_duration, twist_feedback_threshold;
 };
 
 struct p2sm_dataframe {
@@ -54,7 +53,11 @@ struct p2sm_dataframe {
 // origin = ball center
 struct zip_pointer_2s_mixer_data {
     const struct device *dev;
-    struct k_work_delayable twist_filter_cleanup_work, twist_feedback_off_work;
+    struct k_work_delayable twist_filter_cleanup_work;
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+    struct k_work_delayable twist_feedback_off_work;
+#endif
 
     bool initialized;
     int64_t last_rpt_time, last_rpt_time_twist;
@@ -69,14 +72,18 @@ struct zip_pointer_2s_mixer_data {
     struct p2sm_dataframe twist_values;
 
     // pre-calculated
-    float sensor1_surface_x, sensor1_surface_y, sensor1_surface_z;
-    float sensor2_surface_x, sensor2_surface_y, sensor2_surface_z;
     float rotation_matrix1[3][3], rotation_matrix2[3][3];
 
-    int64_t last_sensor1_report, last_sensor2_report; // to ensure sync
     int64_t last_twist; // to filter out single events as they are probably accidental
     int8_t last_twist_direction; // to filter out first event in the opposite direction
-    uint32_t twist_accumulator; // for feedback
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+    uint16_t twist_accumulator; // for feedback
+#endif
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
+    int64_t last_sensor1_report, last_sensor2_report;
+#endif
 };
 
 struct twist_detection {
@@ -89,14 +96,10 @@ static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
 
-#if CONFIG_LOG_MAX_LEVEL >= 4
-static int float_to_str(float value, int precision, char *buffer);
-#endif
-
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const int64_t now = k_uptime_get();
-    const int64_t dt = now - data->last_rpt_time;
+    int64_t dt = now - data->last_rpt_time;
     float rotated_x = 0, rotated_y = 0;
 
     if (data->values.s1_x != 0 || data->values.s1_y != 0) {
@@ -115,6 +118,7 @@ static int process_and_report(const struct device *dev) {
         data->twist_values.s1_y += rotated_y / data->move_coef;
         data->values.s1_x = 0;
         data->values.s1_y = 0;
+        dt = 0;
     }
 
     if (data->values.s2_x != 0 || data->values.s2_y != 0) {
@@ -348,7 +352,9 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     }
 
     if (p1 & INPUT_MIXER_SENSOR1) {
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
         data->last_sensor1_report = now;
+#endif
 
         if (event->code == INPUT_REL_X) {
             data->values.s1_x += event->value;
@@ -356,7 +362,9 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             data->values.s1_y += event->value;
         }
     } else {
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
         data->last_sensor2_report = now;
+#endif
 
         if (event->code == INPUT_REL_X) {
             data->values.s2_x += event->value;
@@ -390,11 +398,13 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
         const int16_t twist_int = (int16_t)data->rpt_twist_remainder;
         data->rpt_twist_remainder -= twist_int;
-        data->twist_accumulator += abs(twist_int);
 
         if (twist_int != 0) {
             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
         }
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+        data->twist_accumulator += abs(twist_int);
 
         if (config->feedback_gpios.port != NULL &&
             data->twist_accumulator >= config->twist_feedback_threshold &&
@@ -408,6 +418,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                 LOG_ERR("Failed to set twist feedback GPIO");
             }
         }
+#endif
 
         data->last_rpt_time_twist = now;
     }
@@ -437,7 +448,7 @@ static int data_init(const struct device *dev) {
 
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const float radius = (float) config->ball_radius;
+    const float radius = config->ball_radius;
     float surface_p1[3], surface_p2[3];
 
     if (radius > 127) {
@@ -463,23 +474,13 @@ static int data_init(const struct device *dev) {
         return 0;
     }
 
-    data->sensor1_surface_x = surface_p1[0];
-    data->sensor1_surface_y = surface_p1[1];
-    data->sensor1_surface_z = surface_p1[2];
-
-    data->sensor2_surface_x = surface_p2[0];
-    data->sensor2_surface_y = surface_p2[1];
-    data->sensor2_surface_z = surface_p2[2];
-
     if (surface_p1[0] == surface_p2[0] && surface_p1[1] == surface_p2[1] && surface_p1[2] == surface_p2[2]) {
         LOG_ERR("Unexpected: both trackpoints have same coordinates!");
         return 0;
     }
 
-    calculate_rotation_matrix(data->sensor1_surface_x, data->sensor1_surface_y, data->sensor1_surface_z,
-        0, 0, -radius, data->rotation_matrix1);
-    calculate_rotation_matrix(data->sensor2_surface_x, data->sensor2_surface_y, data->sensor2_surface_z,
-        0, 0, -radius, data->rotation_matrix2);
+    calculate_rotation_matrix(surface_p1[0], surface_p1[1], surface_p1[2], 0, 0, -radius, data->rotation_matrix1);
+    calculate_rotation_matrix(surface_p2[0], surface_p2[1], surface_p2[2], 0, 0, -radius, data->rotation_matrix2);
 
     data->last_twist_direction = -1;
     data->move_coef = 1.0f;
@@ -493,26 +494,21 @@ static int data_init(const struct device *dev) {
 
     LOG_INF("Sensor mixer driver initialized");
     LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
-    LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) data->sensor1_surface_x, (int) data->sensor1_surface_y, (int) data->sensor1_surface_z);
-    LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) data->sensor2_surface_x, (int) data->sensor2_surface_y, (int) data->sensor2_surface_z);
+    LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) surface_p1[0], (int) surface_p1[1], (int) surface_p1[2]);
+    LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) surface_p2[0], (int) surface_p2[1], (int) surface_p2[2]);
 
-#if CONFIG_LOG_MAX_LEVEL >= 4
-    float_to_str(data->move_coef * 100, 2, log_buf);
-    LOG_DBG("  > Pointer sensitivity: %s%%", log_buf);
-
-    float_to_str(data->twist_coef * 100, 2, log_buf);
-    LOG_DBG("  > Scroll sensitivity: %s%%", log_buf);
-#endif
-
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     if (config->feedback_gpios.port != NULL) {
         if (gpio_pin_configure_dt(&config->feedback_gpios, GPIO_OUTPUT) != 0) {
             LOG_WRN("Failed to configure twist feedback GPIO");
         } else {
             LOG_DBG("Twist feedback GPIO configured");
+            k_work_init_delayable(&data->twist_feedback_off_work, twist_feedback_off_work_cb);
         }
     } else {
         LOG_DBG("No feedback set up for twist");
     }
+#endif
 
     g_dev = (struct device *) dev;
     data->initialized = true;
@@ -527,10 +523,10 @@ static int data_init(const struct device *dev) {
     k_work_init_delayable(&save_work, save_work_cb);
 #endif
 
-    k_work_init_delayable(&data->twist_feedback_off_work, twist_feedback_off_work_cb);
     return 1;
 }
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
 static void twist_feedback_off_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     const struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_off_work);
@@ -539,32 +535,6 @@ static void twist_feedback_off_work_cb(struct k_work *work) {
 
     gpio_pin_set_dt(&config->feedback_gpios, 0);
     LOG_DBG("Twist feedback turned off");
-}
-
-#if CONFIG_LOG_MAX_LEVEL >= 4
-static int float_to_str(const float value, int precision, char *buffer) {
-    int int_part = (int)value;
-    float decimal_part = value - int_part;
-
-    if (value < 0 && decimal_part != 0) {
-        int_part = -int_part;
-        decimal_part = -decimal_part;
-        *buffer++ = '-';
-    }
-
-    int len = snprintf(buffer, 16, "%d", int_part);
-    buffer += len;
-    *buffer++ = '.';
-
-    for (int i = 0; i < precision; i++) {
-        decimal_part *= 10;
-        const int digit = (int) decimal_part;
-        *buffer++ = '0' + digit;
-        decimal_part -= digit;
-    }
-
-    *buffer = '\0';
-    return len + precision + 1;
 }
 #endif
 
@@ -648,7 +618,7 @@ static struct zip_pointer_2s_mixer_config config = {
     .sensor2_pos = DT_INST_PROP(0, sensor2_pos),
     .ball_radius = DT_INST_PROP(0, ball_radius),
     .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(0, feedback_gpios, { .port = NULL }),
-    .twist_feedback_duration = DT_INST_PROP(0, twist_feedback_duration),
-    .twist_feedback_threshold = DT_INST_PROP(0, twist_feedback_threshold),
+    .twist_feedback_duration = DT_INST_PROP_OR(0, twist_feedback_duration, 0),
+    .twist_feedback_threshold = DT_INST_PROP_OR(0, twist_feedback_threshold, 0),
 };
 DEVICE_DT_INST_DEFINE(0, &sy_init, NULL, &data, &config, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &sy_driver_api);
