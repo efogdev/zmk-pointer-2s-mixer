@@ -22,6 +22,7 @@ static float g_from_settings[2] = { -1, -1 };
 
 struct behavior_p2sm_sens_config {
     const bool scroll;
+    const bool wrap;
 
     const uint32_t step;
     const uint32_t min_step, max_step;
@@ -178,17 +179,25 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
     }
 
     float new_val = current + (float) cfg->step * (float) steps / 1000.0f * (direction ? 1.0f : -1.0f);
-    if (new_val > max_value || new_val > (float) cfg->max_multiplier) {
-        LOG_DBG("Sensitivity wrapped around");
-        new_val = min_value;
+    if (cfg->wrap) {
+        if (new_val > max_value || new_val > (float) cfg->max_multiplier) {
+            LOG_DBG("Sensitivity wrapped around");
+            new_val = min_value;
 
-        // specifically for toggle, because... reasons
-        if (fabs(current - new_val) <= 1e-6) {
+            // specifically for toggle, because... reasons
+            if (fabs(current - new_val) <= 1e-6) {
+                new_val = max_value;
+            }
+        } else if (new_val < min_value) {
+            LOG_DBG("Sensitivity wrapped around");
             new_val = max_value;
         }
-    } else if (new_val < min_value) {
-        LOG_DBG("Sensitivity wrapped around");
-        new_val = max_value;
+    } else {
+        if (direction && (new_val > max_value || new_val > (float) cfg->max_multiplier)) {
+            new_val = max_value;
+        } else if (!direction && new_val < min_value) {
+            new_val = min_value;
+        }
     }
 
     LOG_DBG("Sensitivity %s by %d step(s)", direction ? "increased" : "decreased", steps);
@@ -294,6 +303,7 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
     static struct behavior_p2sm_sens_data behavior_p2sm_sens_data_##n = {};                         \
     static const struct behavior_p2sm_sens_config behavior_p2sm_sens_config_##n = {                 \
         .step = DT_INST_PROP(n, step),                                                              \
+        .wrap = DT_INST_PROP_OR(n, wrap, true),                                                     \
         .max_multiplier = DT_INST_PROP_OR(n, max_multiplier, 1),                                    \
         .min_step = DT_INST_PROP_OR(n, min_step, 1),                                                \
         .max_step = DT_INST_PROP_OR(n, max_step, 1000),                                             \

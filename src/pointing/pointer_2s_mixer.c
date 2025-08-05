@@ -34,8 +34,8 @@ static void save_work_cb(struct k_work *work);
 
 struct zip_pointer_2s_mixer_config {
     const uint32_t sync_report_ms, sync_scroll_report_ms;
-    const uint16_t twist_interference_thres; // CPI and sync dependent
-    const uint16_t twist_thres; // CPI and sync dependent
+    const uint16_t twist_interference_thres; // CPI and sync window dependent
+    const uint16_t twist_thres; // CPI and sync window dependent
     const uint8_t ball_radius; // up to 127
 
     // zero (origin) = down left bottom, not the ball center
@@ -344,7 +344,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const int64_t now = k_uptime_get();
 
-    if (!data->initialized) {
+    if (unlikely(!data->initialized)) {
         if (!data_init(dev)) {
             LOG_ERR("Failed to initialize mixer driver data!");
             return -1;

@@ -8,6 +8,7 @@
 			step = <125>;
 			min-step = <1>;
 			max-step = <1000>; // 1000 is effectively equivalent to "any"
+			wrap;
 		};
 
 		// 25% step; scroll
@@ -20,13 +21,11 @@
 			min-step = <1>;
 			max-step = <1000>;
 			scroll;
+			wrap;
 		};
 
 		// example of sensitivity toggle option
 		/omit-if-no-ref/ p2sm_sens_toggle: p2sm_sens_toggle {
-			// will need "okay" somewhere to reuse this behavior instance
-			status = "disabled";
-
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
 			feedback-duration = <250>;
@@ -44,6 +43,8 @@
 
 			// uncomment for the behavior to be applied to scroll sensitivity
 			// scroll;
+
+			wrap;
 		};
 	};
 };
