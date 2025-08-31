@@ -29,6 +29,7 @@ struct behavior_p2sm_sens_config {
     const uint32_t max_multiplier;
 
     const struct gpio_dt_spec feedback_gpios;
+    const struct gpio_dt_spec feedback_extra_gpios;
     const uint32_t feedback_duration;
 };
 
@@ -212,8 +213,11 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
     }
 
     if (cfg->feedback_duration > 0 && cfg->feedback_gpios.port != NULL) {
+        if (cfg->feedback_extra_gpios.port != NULL) {
+            gpio_pin_set_dt(&cfg->feedback_extra_gpios, 1);
+        }
+
         if (gpio_pin_set_dt(&cfg->feedback_gpios, 1) == 0) {
-            LOG_DBG("Feedback turned on");
             k_work_reschedule(&data->feedback_off_work, K_MSEC(cfg->feedback_duration));
         } else {
             LOG_ERR("Failed to enable the feedback");
@@ -229,7 +233,14 @@ static void feedback_off_work_cb(struct k_work *work) {
     const struct device *dev = data->dev;
     const struct behavior_p2sm_sens_config *config = dev->config;
 
-    gpio_pin_set_dt(&config->feedback_gpios, 0);
+    if (config->feedback_extra_gpios.port != NULL) {
+        gpio_pin_set_dt(&config->feedback_extra_gpios, 0);
+    }
+
+    if (config->feedback_gpios.port != NULL) {
+        gpio_pin_set_dt(&config->feedback_gpios, 0);
+    }
+
     LOG_DBG("Feedback turned off");
 }
 
@@ -287,6 +298,16 @@ static int behavior_p2sm_sens_init(const struct device *dev) {
         LOG_DBG("No feedback set up for sensitivity cycling");
     }
 
+    if (cfg->feedback_extra_gpios.port != NULL) {
+        if (gpio_pin_configure_dt(&cfg->feedback_extra_gpios, GPIO_OUTPUT) != 0) {
+            LOG_WRN("Failed to configure sensitivity extra feedback GPIO");
+        } else {
+            LOG_DBG("Sensitivity extra feedback GPIO configured");
+        }
+    } else {
+        LOG_DBG("No extra feedback set up for sensitivity cycling");
+    }
+
     data->dev = dev;
     g_devices[g_dev_num++] = dev->name;
     return 0;
@@ -299,19 +320,20 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
 #endif // IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
 };
 
-#define P2SM_INST(n)                                                                                \
-    static struct behavior_p2sm_sens_data behavior_p2sm_sens_data_##n = {};                         \
-    static const struct behavior_p2sm_sens_config behavior_p2sm_sens_config_##n = {                 \
-        .step = DT_INST_PROP(n, step),                                                              \
-        .wrap = DT_INST_PROP_OR(n, wrap, true),                                                     \
-        .max_multiplier = DT_INST_PROP_OR(n, max_multiplier, 1),                                    \
-        .min_step = DT_INST_PROP_OR(n, min_step, 1),                                                \
-        .max_step = DT_INST_PROP_OR(n, max_step, 1000),                                             \
-        .scroll = DT_INST_PROP_OR(n, scroll, false),                                                \
-        .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_gpios, { .port = NULL }),            \
-        .feedback_duration = DT_INST_PROP_OR(n, feedback_duration, 0),                              \
-    };                                                                                              \
-    BEHAVIOR_DT_INST_DEFINE(n, behavior_p2sm_sens_init, NULL, &behavior_p2sm_sens_data_##n,         \
+#define P2SM_INST(n)                                                                                  \
+    static struct behavior_p2sm_sens_data behavior_p2sm_sens_data_##n = {};                           \
+    static const struct behavior_p2sm_sens_config behavior_p2sm_sens_config_##n = {                   \
+        .step = DT_INST_PROP(n, step),                                                                \
+        .wrap = DT_INST_PROP_OR(n, wrap, true),                                                       \
+        .max_multiplier = DT_INST_PROP_OR(n, max_multiplier, 1),                                      \
+        .min_step = DT_INST_PROP_OR(n, min_step, 1),                                                  \
+        .max_step = DT_INST_PROP_OR(n, max_step, 1000),                                               \
+        .scroll = DT_INST_PROP_OR(n, scroll, false),                                                  \
+        .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_gpios, { .port = NULL }),              \
+        .feedback_extra_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_extra_gpios, { .port = NULL }),  \
+        .feedback_duration = DT_INST_PROP_OR(n, feedback_duration, 0),                                \
+    };                                                                                                \
+    BEHAVIOR_DT_INST_DEFINE(n, behavior_p2sm_sens_init, NULL, &behavior_p2sm_sens_data_##n,           \
         &behavior_p2sm_sens_config_##n, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &behavior_p2sm_sens_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(P2SM_INST)

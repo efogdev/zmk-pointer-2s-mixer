@@ -361,7 +361,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         } else if (event->code == INPUT_REL_Y) {
             data->values.s1_y += event->value;
         }
-    } else {
+    } else if (p1 & INPUT_MIXER_SENSOR2) {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
         data->last_sensor2_report = now;
 #endif
