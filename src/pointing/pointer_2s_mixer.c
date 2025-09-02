@@ -377,7 +377,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     event->sync = false;
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
-    if (abs((int32_t) (data->last_sensor1_report - data->last_sensor2_report)) > CONFIG_POINTER_2S_MIXER_SYNC_WINDOW_MS) {
+    if (unlikely(abs((int32_t) (data->last_sensor1_report - data->last_sensor2_report)) > CONFIG_POINTER_2S_MIXER_SYNC_WINDOW_MS)) {
         memset(&data->values, 0, sizeof(struct p2sm_dataframe));
         memset(&data->twist_values, 0, sizeof(struct p2sm_dataframe));
         return 0;
@@ -607,6 +607,7 @@ void p2sm_set_twist_coef(const float coef) {
     p2sm_save_sensitivity();
 #endif
 }
+
 
 static struct zip_pointer_2s_mixer_data data = {};
 static struct zip_pointer_2s_mixer_config config = {
