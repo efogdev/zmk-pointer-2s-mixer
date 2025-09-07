@@ -31,11 +31,14 @@ struct behavior_p2sm_sens_config {
     const struct gpio_dt_spec feedback_gpios;
     const struct gpio_dt_spec feedback_extra_gpios;
     const uint32_t feedback_duration;
+    const uint8_t feedback_wrap_pattern_len;
+    const int feedback_wrap_pattern[CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_ARR_VALUES];
 };
 
 struct behavior_p2sm_sens_data {
     const struct device *dev;
     struct k_work_delayable feedback_off_work;
+    int previous_feedback_extra_state;
 };
 
 #if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
@@ -214,6 +217,7 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
 
     if (cfg->feedback_duration > 0 && cfg->feedback_gpios.port != NULL) {
         if (cfg->feedback_extra_gpios.port != NULL) {
+            data->previous_feedback_extra_state = gpio_pin_get_dt(&cfg->feedback_extra_gpios);
             gpio_pin_set_dt(&cfg->feedback_extra_gpios, 1);
         }
 
@@ -234,7 +238,7 @@ static void feedback_off_work_cb(struct k_work *work) {
     const struct behavior_p2sm_sens_config *config = dev->config;
 
     if (config->feedback_extra_gpios.port != NULL) {
-        gpio_pin_set_dt(&config->feedback_extra_gpios, 0);
+        gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
     }
 
     if (config->feedback_gpios.port != NULL) {
@@ -332,6 +336,8 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
         .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_gpios, { .port = NULL }),              \
         .feedback_extra_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_extra_gpios, { .port = NULL }),  \
         .feedback_duration = DT_INST_PROP_OR(n, feedback_duration, 0),                                \
+        .feedback_wrap_pattern_len = DT_INST_PROP_LEN_OR(n, feedback_wrap_pattern, 0),                \
+        .feedback_wrap_pattern = DT_INST_PROP_OR(n, feedback_wrap_pattern, { 0 }),                   \
     };                                                                                                \
     BEHAVIOR_DT_INST_DEFINE(n, behavior_p2sm_sens_init, NULL, &behavior_p2sm_sens_data_##n,           \
         &behavior_p2sm_sens_config_##n, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &behavior_p2sm_sens_driver_api);

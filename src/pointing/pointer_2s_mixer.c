@@ -28,8 +28,8 @@ static void twist_feedback_off_work_cb(struct k_work *work);
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
-struct k_work_delayable save_work;
-static void save_work_cb(struct k_work *work);
+struct k_work_delayable p2sm_save_work;
+static void p2sm_save_work_cb(struct k_work *work);
 #endif
 
 struct zip_pointer_2s_mixer_config {
@@ -520,7 +520,7 @@ static int data_init(const struct device *dev) {
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
-    k_work_init_delayable(&save_work, save_work_cb);
+    k_work_init_delayable(&p2sm_save_work, p2sm_save_work_cb);
 #endif
 
     return 1;
@@ -543,7 +543,7 @@ static struct zmk_input_processor_driver_api sy_driver_api = {
 };
 
 #if IS_ENABLED(CONFIG_SETTINGS)
-static void save_work_cb(struct k_work *work) {
+static void p2sm_save_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     const float values[2] = { data->move_coef, data->twist_coef };
 
@@ -556,7 +556,7 @@ static void save_work_cb(struct k_work *work) {
 }
 
 static void p2sm_save_sensitivity() {
-    k_work_reschedule(&save_work, K_MSEC(CONFIG_POINTER_2S_MIXER_SETTINGS_SAVE_DELAY));
+    k_work_reschedule(&p2sm_save_work, K_MSEC(CONFIG_POINTER_2S_MIXER_SETTINGS_SAVE_DELAY));
 }
 #endif
 
@@ -607,7 +607,6 @@ void p2sm_set_twist_coef(const float coef) {
     p2sm_save_sensitivity();
 #endif
 }
-
 
 static struct zip_pointer_2s_mixer_data data = {};
 static struct zip_pointer_2s_mixer_config config = {

@@ -13,6 +13,10 @@ config POINTER_2S_MIXER_SENS_MAX_DEVICES
   int "Maximum sensitivity cyclers in device tree"
   default 6
 
+config POINTER_2S_MIXER_FEEDBACK_MAX_ARR_VALUES
+  int "Maximum items in feedback pattern array"
+  default 8
+
 config POINTER_2S_MIXER_SETTINGS_SAVE_DELAY
   int "Debounce of the save operation, msec"
   default 2500

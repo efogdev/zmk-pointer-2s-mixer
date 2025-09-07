@@ -31,6 +31,8 @@ properties:
     type: phandle-array
   feedback-extra-gpios:
     type: phandle-array
+  feedback-wrap-pattern:
+    type: array
   feedback-duration:
     type: int
     default: 0
