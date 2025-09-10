@@ -8,6 +8,7 @@
 			step = <125>;
 			min-step = <1>;
 			max-step = <1000>; // 1000 is effectively equivalent to "any"
+			feedback-wrap-pattern = <0 10 65 25 65 25 65>;
 			wrap;
 		};
 
@@ -20,6 +21,7 @@
 			max-multiplier = <1>;
 			min-step = <1>;
 			max-step = <1000>;
+			feedback-wrap-pattern = <0 10 65 25 65 25 65>;
 			scroll;
 			wrap;
 		};
