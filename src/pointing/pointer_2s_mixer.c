@@ -413,6 +413,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         data->rpt_twist_remainder -= twist_int;
 
         if (twist_int != 0) {
+            data->last_rpt_time_twist = now;
             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
         }
 
@@ -444,8 +445,6 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             }
         }
 #endif
-
-        data->last_rpt_time_twist = now;
     }
 
     return 0;
