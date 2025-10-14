@@ -25,6 +25,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
 static void twist_feedback_off_work_cb(struct k_work *work);
+static void twist_feedback_extra_delay_work_cb(struct k_work *work);
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
@@ -43,7 +44,8 @@ struct zip_pointer_2s_mixer_config {
 
     // feedback (i.e. vibration)
     const struct gpio_dt_spec feedback_gpios;
-    const uint16_t twist_feedback_duration, twist_feedback_threshold;
+    const struct gpio_dt_spec feedback_extra_gpios;
+    const uint16_t twist_feedback_duration, twist_feedback_threshold, twist_feedback_delay;
 };
 
 struct p2sm_dataframe {
@@ -57,6 +59,8 @@ struct zip_pointer_2s_mixer_data {
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     struct k_work_delayable twist_feedback_off_work;
+    struct k_work_delayable twist_feedback_extra_delay_work;
+    int previous_feedback_extra_state;
 #endif
 
     bool initialized;
@@ -411,11 +415,23 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             config->twist_feedback_threshold > 0) {
             data->twist_accumulator = 0;
 
-            if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
-                k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-                LOG_DBG("Twist feedback activated (accumulator: %d)", data->twist_accumulator);
+            if (config->feedback_extra_gpios.port != NULL) {
+                data->previous_feedback_extra_state = gpio_pin_get_dt(&config->feedback_extra_gpios);
+                if (gpio_pin_set_dt(&config->feedback_extra_gpios, 1) != 0) {
+                    LOG_ERR("Failed to set twist feedback extra GPIO");
+                }
+            }
+
+            if (config->twist_feedback_delay > 0) {
+                k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(config->twist_feedback_delay));
+                LOG_DBG("Twist feedback extra GPIO activated, scheduling main feedback after %d ms delay", config->twist_feedback_delay);
             } else {
-                LOG_ERR("Failed to set twist feedback GPIO");
+                if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
+                    k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
+                    LOG_DBG("Twist feedback activated immediately (accumulator: %d)", data->twist_accumulator);
+                } else {
+                    LOG_ERR("Failed to set twist feedback GPIO");
+                }
             }
         }
 #endif
@@ -508,6 +524,17 @@ static int data_init(const struct device *dev) {
     } else {
         LOG_DBG("No feedback set up for twist");
     }
+
+    if (config->feedback_extra_gpios.port != NULL) {
+        if (gpio_pin_configure_dt(&config->feedback_extra_gpios, GPIO_OUTPUT) != 0) {
+            LOG_WRN("Failed to configure twist feedback extra GPIO");
+        } else {
+            LOG_DBG("Twist feedback extra GPIO configured");
+            k_work_init_delayable(&data->twist_feedback_extra_delay_work, twist_feedback_extra_delay_work_cb);
+        }
+    } else {
+        LOG_DBG("No extra feedback set up for twist");
+    }
 #endif
 
     g_dev = (struct device *) dev;
@@ -534,7 +561,26 @@ static void twist_feedback_off_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
 
     gpio_pin_set_dt(&config->feedback_gpios, 0);
+    
+    if (config->feedback_extra_gpios.port != NULL) {
+        gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
+    }
+    
     LOG_DBG("Twist feedback turned off");
+}
+
+static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    const struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_extra_delay_work);
+    const struct device *dev = data->dev;
+    const struct zip_pointer_2s_mixer_config *config = dev->config;
+
+    if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
+        k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
+        LOG_DBG("Twist feedback activated after extra delay");
+    } else {
+        LOG_ERR("Failed to set twist feedback GPIO after extra delay");
+    }
 }
 #endif
 
@@ -618,7 +664,9 @@ static struct zip_pointer_2s_mixer_config config = {
     .sensor2_pos = DT_INST_PROP(0, sensor2_pos),
     .ball_radius = DT_INST_PROP(0, ball_radius),
     .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(0, feedback_gpios, { .port = NULL }),
+    .feedback_extra_gpios = GPIO_DT_SPEC_INST_GET_OR(0, feedback_extra_gpios, { .port = NULL }),
     .twist_feedback_duration = DT_INST_PROP_OR(0, twist_feedback_duration, 0),
     .twist_feedback_threshold = DT_INST_PROP_OR(0, twist_feedback_threshold, 0),
+    .twist_feedback_delay = DT_INST_PROP_OR(0, twist_feedback_delay, 0),
 };
 DEVICE_DT_INST_DEFINE(0, &sy_init, NULL, &data, &config, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &sy_driver_api);
