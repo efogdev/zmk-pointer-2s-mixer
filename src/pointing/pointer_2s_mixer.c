@@ -148,6 +148,15 @@ static int process_and_report(const struct device *dev) {
     data->rpt_x_remainder -= data->rpt_x;
     data->rpt_y_remainder -= data->rpt_y;
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER)
+    if (now - data->last_rpt_time_twist < CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION) {
+        data->last_rpt_time = now;
+        data->rpt_x = 0;
+        data->rpt_y = 0;
+        return;
+    }
+#endif
+
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
@@ -571,7 +580,7 @@ static void twist_feedback_off_work_cb(struct k_work *work) {
 
 static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    const struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_extra_delay_work);
+    struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_extra_delay_work);
     const struct device *dev = data->dev;
     const struct zip_pointer_2s_mixer_config *config = dev->config;
 

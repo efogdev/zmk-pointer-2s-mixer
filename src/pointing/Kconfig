@@ -73,4 +73,12 @@ config POINTER_2S_MIXER_FEEDBACK_EN
   bool "Enable feedback"
   default y
 
+config POINTER_2S_MIXER_SCROLL_DISABLES_POINTER
+  bool "Scroll disables pointer"
+  default n
+
+config POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION
+  int "Period of pointer inactivity"
+  default 200
+
 endif # ZMK_POINTER_2S_MIXER
