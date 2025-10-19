@@ -337,9 +337,9 @@ static float calculate_twist(const struct device *dev) {
     struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
     dataframe_history_cleanup(dev, cutoff_time);
 
-    LOG_INF("Interference: %d", abs(data->interference_accumulator));
+    LOG_DBG("Interference: %d", abs(data->interference_accumulator));
     if (abs(data->interference_accumulator) > config->twist_interference_thres) {
-        LOG_INF("Discarded twist (reason = interference_threshold)");
+        LOG_DBG("Discarded twist (reason = interference_threshold)");
         return 0;
     }
 
@@ -349,21 +349,21 @@ static float calculate_twist(const struct device *dev) {
     total_under_thres += abs(s2_x) < config->twist_thres;
     total_under_thres += abs(s2_y) < config->twist_thres;
     
-    LOG_INF("Analyzing movement: (%d, %d) (%d, %d)", s1_x, s1_y, s2_x, s2_y);
+    LOG_DBG("Analyzing movement: (%d, %d) (%d, %d)", s1_x, s1_y, s2_x, s2_y);
     if (total_under_thres == 4) {
-        LOG_INF("Discarded movement (reason = twist_thres)");
+        LOG_DBG("Discarded movement (reason = twist_thres)");
         return 0;
     }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_34_FILTER_EN)
     if (total_under_thres == 3) {
-        LOG_INF("Discarded movement (reason = 3_of_4_below_twist_thres)");
+        LOG_DBG("Discarded movement (reason = 3_of_4_below_twist_thres)");
         return 0;
     }
 #endif
 
     if (passed > CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL) {
-        LOG_INF("Discarded twist (reason = time_filter)");
+        LOG_DBG("Discarded twist (reason = time_filter)");
         data->last_twist = now;
         return 0;
     }
@@ -392,7 +392,7 @@ static float calculate_twist(const struct device *dev) {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
         if (data->last_twist_direction != t->direction) {
             data->last_twist_direction = t->direction;
-            LOG_INF("Discarded twist (reason = direction_filter)");
+            LOG_DBG("Discarded twist (reason = direction_filter)");
             return 0;
         }
 #endif
@@ -406,7 +406,7 @@ static float calculate_twist(const struct device *dev) {
         k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
 
-        LOG_INF("Scroll value calculated: %d", (int) result);
+        LOG_DBG("Scroll value calculated: %d", (int) result);
         return result;
     }
 
@@ -421,7 +421,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
     data->last_twist_direction = -1;
-    LOG_INF("Direction filter data discarded (timeout)");
+    LOG_DBG("Direction filter data discarded (timeout)");
 }
 #endif
 
@@ -501,12 +501,9 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
         if (twist_int != 0) {
             if (scroll_percentage_filter(dev)) {
-                LOG_ERR("SCROLL BABE");
                 data->last_rpt_time_twist = now;
                 input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
-            } else {
-                LOG_WRN("Discarded scroll");
-            }
+            } 
         }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
@@ -526,11 +523,11 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
             if (config->twist_feedback_delay > 0) {
                 k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(config->twist_feedback_delay));
-                LOG_INF("Twist feedback extra GPIO activated, scheduling main feedback after %d ms delay", config->twist_feedback_delay);
+                LOG_DBG("Twist feedback extra GPIO activated, scheduling main feedback after %d ms delay", config->twist_feedback_delay);
             } else {
                 if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
                     k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-                    LOG_INF("Twist feedback activated immediately (accumulator: %d)", data->twist_accumulator);
+                    LOG_DBG("Twist feedback activated immediately (accumulator: %d)", data->twist_accumulator);
                 } else {
                     LOG_ERR("Failed to set twist feedback GPIO");
                 }
@@ -621,32 +618,32 @@ static int data_init(const struct device *dev) {
         data->move_coef = 1.0f;
     }
 
-    LOG_INF("Sensor mixer driver initialized");
-    LOG_INF("  > Ball radius: %d", (int) config->ball_radius);
-    LOG_INF("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) surface_p1[0], (int) surface_p1[1], (int) surface_p1[2]);
-    LOG_INF("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) surface_p2[0], (int) surface_p2[1], (int) surface_p2[2]);
+    LOG_DBG("Sensor mixer driver initialized");
+    LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
+    LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) surface_p1[0], (int) surface_p1[1], (int) surface_p1[2]);
+    LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) surface_p2[0], (int) surface_p2[1], (int) surface_p2[2]);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     if (config->feedback_gpios.port != NULL) {
         if (gpio_pin_configure_dt(&config->feedback_gpios, GPIO_OUTPUT) != 0) {
             LOG_WRN("Failed to configure twist feedback GPIO");
         } else {
-            LOG_INF("Twist feedback GPIO configured");
+            LOG_DBG("Twist feedback GPIO configured");
             k_work_init_delayable(&data->twist_feedback_off_work, twist_feedback_off_work_cb);
         }
     } else {
-        LOG_INF("No feedback set up for twist");
+        LOG_DBG("No feedback set up for twist");
     }
 
     if (config->feedback_extra_gpios.port != NULL) {
         if (gpio_pin_configure_dt(&config->feedback_extra_gpios, GPIO_OUTPUT) != 0) {
             LOG_WRN("Failed to configure twist feedback extra GPIO");
         } else {
-            LOG_INF("Twist feedback extra GPIO configured");
+            LOG_DBG("Twist feedback extra GPIO configured");
             k_work_init_delayable(&data->twist_feedback_extra_delay_work, twist_feedback_extra_delay_work_cb);
         }
     } else {
-        LOG_INF("No extra feedback set up for twist");
+        LOG_DBG("No extra feedback set up for twist");
     }
 #endif
 
@@ -679,7 +676,7 @@ static void twist_feedback_off_work_cb(struct k_work *work) {
         gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
     }
     
-    LOG_INF("Twist feedback turned off");
+    LOG_DBG("Twist feedback turned off");
 }
 
 static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
@@ -690,7 +687,7 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
 
     if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
         k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-        LOG_INF("Twist feedback activated after extra delay");
+        LOG_DBG("Twist feedback activated after extra delay");
     } else {
         LOG_ERR("Failed to set twist feedback GPIO after extra delay");
     }
@@ -710,7 +707,7 @@ static void p2sm_save_work_cb(struct k_work *work) {
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     } else {
-        LOG_INF("Sensitivity settings saved");
+        LOG_DBG("Sensitivity settings saved");
     }
 }
 
