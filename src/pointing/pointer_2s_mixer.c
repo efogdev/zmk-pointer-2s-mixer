@@ -35,12 +35,13 @@ static void p2sm_save_work_cb(struct k_work *work);
 
 struct zip_pointer_2s_mixer_config {
     const uint32_t sync_report_ms, sync_scroll_report_ms;
-    const uint16_t twist_interference_thres; // CPI and sync window dependent
-    const uint16_t twist_thres; // CPI and sync window dependent
-    const uint8_t ball_radius; // up to 127
+
+    // CPI and sync window dependent
+    const uint16_t twist_thres, twist_interference_thres, twist_interference_window;
 
     // zero (origin) = down left bottom, not the ball center
     const uint8_t sensor1_pos[3], sensor2_pos[3];
+    const uint8_t ball_radius; // up to 127
 
     // feedback (i.e. vibration)
     const struct gpio_dt_spec feedback_gpios;
@@ -50,6 +51,13 @@ struct zip_pointer_2s_mixer_config {
 
 struct p2sm_dataframe {
     int16_t s1_x, s1_y, s2_x, s2_y;
+};
+
+struct dataframe_history_entry {
+    int64_t timestamp;
+    struct p2sm_dataframe dataframe;
+    float calculated_scroll;
+    struct dataframe_history_entry *next;
 };
 
 // origin = ball center
@@ -88,6 +96,14 @@ struct zip_pointer_2s_mixer_data {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     int64_t last_sensor1_report, last_sensor2_report;
 #endif
+
+    struct dataframe_history_entry *history_head;
+    struct dataframe_history_entry *history_pool;
+    int16_t interference_accumulator;
+    
+    uint8_t max_history_entries;
+    struct dataframe_history_entry *history_buffer;
+    uint8_t history_buffer_index;
 };
 
 struct twist_detection {
@@ -99,6 +115,35 @@ struct twist_detection {
 static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
+static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe);
+static void dataframe_history_cleanup(const struct device *dev, int64_t cutoff_time);
+
+static bool scroll_percentage_filter(const struct device *dev) {
+    const struct zip_pointer_2s_mixer_data *data = dev->data;
+    const struct zip_pointer_2s_mixer_config *config = dev->config;
+    const int64_t now = k_uptime_get();
+    const int64_t cutoff_time = now - config->twist_interference_window;
+    const struct dataframe_history_entry *current = data->history_head;
+    int total_entries = 0, scroll_entries = 0;
+
+    while (current != NULL) {
+        if (current->timestamp >= cutoff_time) {
+            total_entries++;
+            if (fabs(current->calculated_scroll) > config->twist_thres) {
+                scroll_entries++;
+            }
+        }
+        current = current->next;
+    }
+    
+    if (total_entries == 0) {
+        return false;
+    }
+    
+    const int scroll_percentage = (scroll_entries * 100) / total_entries;
+    LOG_WRN("Scroll %: %d", scroll_percentage);
+    return scroll_percentage >= CONFIG_POINTER_2S_MIXER_SCROLL_PERCENTAGE_THRESHOLD;
+}
 
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
@@ -108,8 +153,10 @@ static int process_and_report(const struct device *dev) {
 
     if (data->values.s1_x != 0 || data->values.s1_y != 0) {
         apply_rotation(data->rotation_matrix1, data->values.s1_x, data->values.s1_y, &rotated_x, &rotated_y);
-        apply_coef(data->move_coef, &rotated_x, &rotated_y);
+        data->twist_values.s1_x += rotated_x;
+        data->twist_values.s1_y += rotated_y;
 
+        apply_coef(data->move_coef, &rotated_x, &rotated_y);
         if (dt > CONFIG_POINTER_2S_MIXER_REMAINDER_TTL) {
             data->rpt_x_remainder = rotated_x;
             data->rpt_y_remainder = rotated_y;
@@ -118,8 +165,6 @@ static int process_and_report(const struct device *dev) {
             data->rpt_y_remainder += rotated_y;
         }
 
-        data->twist_values.s1_x += rotated_x / data->move_coef;
-        data->twist_values.s1_y += rotated_y / data->move_coef;
         data->values.s1_x = 0;
         data->values.s1_y = 0;
         dt = 0;
@@ -127,8 +172,10 @@ static int process_and_report(const struct device *dev) {
 
     if (data->values.s2_x != 0 || data->values.s2_y != 0) {
         apply_rotation(data->rotation_matrix2, data->values.s2_x, data->values.s2_y, &rotated_x, &rotated_y);
-        apply_coef(data->move_coef, &rotated_x, &rotated_y);
+        data->twist_values.s2_x += rotated_x;
+        data->twist_values.s2_y += rotated_y;
 
+        apply_coef(data->move_coef, &rotated_x, &rotated_y);
         if (dt > CONFIG_POINTER_2S_MIXER_REMAINDER_TTL) {
             data->rpt_x_remainder = rotated_x;
             data->rpt_y_remainder = rotated_y;
@@ -137,8 +184,6 @@ static int process_and_report(const struct device *dev) {
             data->rpt_y_remainder += rotated_y;
         }
 
-        data->twist_values.s2_x += rotated_x / data->move_coef;
-        data->twist_values.s2_y += rotated_y / data->move_coef;
         data->values.s2_x = 0;
         data->values.s2_y = 0;
     }
@@ -153,7 +198,7 @@ static int process_and_report(const struct device *dev) {
         data->last_rpt_time = now;
         data->rpt_x = 0;
         data->rpt_y = 0;
-        return;
+        return 0;
     }
 #endif
 
@@ -225,6 +270,53 @@ static void apply_coef(const float coef, float *x, float *y) {
     *y *= coef;
 }
 
+static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe) {
+    struct zip_pointer_2s_mixer_data *data = dev->data;
+    const int64_t now = k_uptime_get();
+    
+    struct dataframe_history_entry *entry = data->history_pool;
+    if (entry != NULL) {
+        data->history_pool = entry->next;
+    } else if (data->history_buffer_index < data->max_history_entries) {
+        entry = &data->history_buffer[data->history_buffer_index++];
+    } else {
+        entry = malloc(sizeof(struct dataframe_history_entry));
+        if (entry == NULL) {
+            LOG_ERR("Failed to allocate dataframe history entry");
+            return NULL;
+        }
+    }
+    
+    entry->timestamp = now;
+    entry->dataframe = *dataframe;
+    entry->next = data->history_head;
+    data->history_head = entry;
+    
+    const int16_t movement = dataframe->s1_x + dataframe->s1_y + dataframe->s2_x + dataframe->s2_y;
+    data->interference_accumulator += movement;
+    return entry;
+}
+
+static void dataframe_history_cleanup(const struct device *dev, const int64_t cutoff_time) {
+    struct zip_pointer_2s_mixer_data *data = dev->data;
+    struct dataframe_history_entry **current = &data->history_head;
+    
+    while (*current != NULL) {
+        if ((*current)->timestamp < cutoff_time) {
+            struct dataframe_history_entry *to_remove = *current;
+            *current = to_remove->next;
+            
+            const int16_t movement = to_remove->dataframe.s1_x + to_remove->dataframe.s1_y + 
+                                   to_remove->dataframe.s2_x + to_remove->dataframe.s2_y;
+            data->interference_accumulator -= movement;
+            to_remove->next = data->history_pool;
+            data->history_pool = to_remove;
+        } else {
+            current = &(*current)->next;
+        }
+    }
+}
+
 static float calculate_twist(const struct device *dev) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
@@ -234,9 +326,20 @@ static float calculate_twist(const struct device *dev) {
     const int16_t s1_y = data->twist_values.s1_y;
     const int16_t s2_x = data->twist_values.s2_x;
     const int16_t s2_y = data->twist_values.s2_y;
-    memset(&data->twist_values, 0, sizeof(data->twist_values));
 
+    memset(&data->twist_values, 0, sizeof(data->twist_values));
     if (s1_x == 0 && s1_y == 0 && s2_x == 0 && s2_y == 0) {
+        return 0;
+    }
+
+    const struct p2sm_dataframe current_dataframe = {s1_x, s1_y, s2_x, s2_y};
+    const int64_t cutoff_time = now - config->twist_interference_window;
+    struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
+    dataframe_history_cleanup(dev, cutoff_time);
+
+    LOG_INF("Interference: %d", abs(data->interference_accumulator));
+    if (abs(data->interference_accumulator) > config->twist_interference_thres) {
+        LOG_INF("Discarded twist (reason = interference_threshold)");
         return 0;
     }
 
@@ -246,37 +349,21 @@ static float calculate_twist(const struct device *dev) {
     total_under_thres += abs(s2_x) < config->twist_thres;
     total_under_thres += abs(s2_y) < config->twist_thres;
     
-    LOG_DBG("Analyzing movement: (%d, %d) (%d, %d)", s1_x, s1_y, s2_x, s2_y);
-    if (total_under_thres == 4 && passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_DBG("Discarded movement (reason = twist_thres)");
+    LOG_INF("Analyzing movement: (%d, %d) (%d, %d)", s1_x, s1_y, s2_x, s2_y);
+    if (total_under_thres == 4) {
+        LOG_INF("Discarded movement (reason = twist_thres)");
         return 0;
     }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_34_FILTER_EN)
-    if (total_under_thres == 3 && passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_DBG("Discarded movement (reason = 3_of_4_below_twist_thres)");
+    if (total_under_thres == 3) {
+        LOG_INF("Discarded movement (reason = 3_of_4_below_twist_thres)");
         return 0;
     }
 #endif
 
-    const int16_t x = abs(s1_x + s2_x);
-    const int16_t y = abs(s1_y + s2_y);
-    if (x > config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL ||
-        y > config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL) {
-        data->last_twist_direction = -1;
-        data->last_twist = 0;
-        LOG_DBG("Discarded movement (reason = significant_translation), filters reapplied");
-        return 0;
-    }
-
-    if ((x > config->twist_interference_thres || y > config->twist_interference_thres) &&
-        passed > CONFIG_POINTER_2S_MIXER_TWIST_NO_FILTER_THRES) {
-        LOG_DBG("Discarded twist (reason = twist_interference_thres)");
-        return 0;
-    }
-
     if (passed > CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL) {
-        LOG_DBG("Discarded twist (reason = time_filter)");
+        LOG_INF("Discarded twist (reason = time_filter)");
         data->last_twist = now;
         return 0;
     }
@@ -292,7 +379,7 @@ static float calculate_twist(const struct device *dev) {
 
     for (int i = 0; i < 4; i++) {
         const struct twist_detection *t = &twist_scenarios[i];
-        const int16_t threshold = config->twist_interference_thres;
+        const int16_t threshold = config->twist_thres;
 
         const bool condition = (i % 2 == 0)
             ? (t->val1 > threshold && t->val2 < -threshold)
@@ -305,21 +392,21 @@ static float calculate_twist(const struct device *dev) {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
         if (data->last_twist_direction != t->direction) {
             data->last_twist_direction = t->direction;
-            LOG_DBG("Discarded twist (reason = direction_filter)");
+            LOG_INF("Discarded twist (reason = direction_filter)");
             return 0;
         }
 #endif
 
-        const float result = t->direction ? -(float)(t->val1 - t->val2) : (float)(t->val2 - t->val1);
-        LOG_DBG("Scroll value calculated: %d", (int) result);
+        const float result = (t->direction ? -(float)(t->val1 - t->val2) : (float)(t->val2 - t->val1)) - (float)(s1_y + s2_y);
+        history_entry->calculated_scroll = result;
 
         data->last_twist = now;
         data->last_twist_direction = t->direction;
-
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
         k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
 
+        LOG_INF("Scroll value calculated: %d", (int) result);
         return result;
     }
 
@@ -334,7 +421,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
     data->last_twist_direction = -1;
-    LOG_DBG("Direction filter data discarded (timeout)");
+    LOG_INF("Direction filter data discarded (timeout)");
 }
 #endif
 
@@ -413,8 +500,13 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         data->rpt_twist_remainder -= twist_int;
 
         if (twist_int != 0) {
-            data->last_rpt_time_twist = now;
-            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
+            if (scroll_percentage_filter(dev)) {
+                LOG_ERR("SCROLL BABE");
+                data->last_rpt_time_twist = now;
+                input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
+            } else {
+                LOG_WRN("Discarded scroll");
+            }
         }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
@@ -434,11 +526,11 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
             if (config->twist_feedback_delay > 0) {
                 k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(config->twist_feedback_delay));
-                LOG_DBG("Twist feedback extra GPIO activated, scheduling main feedback after %d ms delay", config->twist_feedback_delay);
+                LOG_INF("Twist feedback extra GPIO activated, scheduling main feedback after %d ms delay", config->twist_feedback_delay);
             } else {
                 if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
                     k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-                    LOG_DBG("Twist feedback activated immediately (accumulator: %d)", data->twist_accumulator);
+                    LOG_INF("Twist feedback activated immediately (accumulator: %d)", data->twist_accumulator);
                 } else {
                     LOG_ERR("Failed to set twist feedback GPIO");
                 }
@@ -509,6 +601,19 @@ static int data_init(const struct device *dev) {
     data->last_twist_direction = -1;
     data->move_coef = 1.0f;
     data->twist_coef = 1.0f;
+    
+    data->history_head = NULL;
+    data->history_pool = NULL;
+    data->interference_accumulator = 0;
+    
+    data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 2;
+    data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
+    data->history_buffer_index = 0;
+    
+    if (data->history_buffer == NULL) {
+        LOG_ERR("Failed to allocate history buffer");
+        data->max_history_entries = 0;
+    }
 
     // going >1 means losing precision
     // acceptable for scroll but not movement
@@ -517,31 +622,31 @@ static int data_init(const struct device *dev) {
     }
 
     LOG_INF("Sensor mixer driver initialized");
-    LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
-    LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) surface_p1[0], (int) surface_p1[1], (int) surface_p1[2]);
-    LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) surface_p2[0], (int) surface_p2[1], (int) surface_p2[2]);
+    LOG_INF("  > Ball radius: %d", (int) config->ball_radius);
+    LOG_INF("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) surface_p1[0], (int) surface_p1[1], (int) surface_p1[2]);
+    LOG_INF("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) surface_p2[0], (int) surface_p2[1], (int) surface_p2[2]);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     if (config->feedback_gpios.port != NULL) {
         if (gpio_pin_configure_dt(&config->feedback_gpios, GPIO_OUTPUT) != 0) {
             LOG_WRN("Failed to configure twist feedback GPIO");
         } else {
-            LOG_DBG("Twist feedback GPIO configured");
+            LOG_INF("Twist feedback GPIO configured");
             k_work_init_delayable(&data->twist_feedback_off_work, twist_feedback_off_work_cb);
         }
     } else {
-        LOG_DBG("No feedback set up for twist");
+        LOG_INF("No feedback set up for twist");
     }
 
     if (config->feedback_extra_gpios.port != NULL) {
         if (gpio_pin_configure_dt(&config->feedback_extra_gpios, GPIO_OUTPUT) != 0) {
             LOG_WRN("Failed to configure twist feedback extra GPIO");
         } else {
-            LOG_DBG("Twist feedback extra GPIO configured");
+            LOG_INF("Twist feedback extra GPIO configured");
             k_work_init_delayable(&data->twist_feedback_extra_delay_work, twist_feedback_extra_delay_work_cb);
         }
     } else {
-        LOG_DBG("No extra feedback set up for twist");
+        LOG_INF("No extra feedback set up for twist");
     }
 #endif
 
@@ -574,7 +679,7 @@ static void twist_feedback_off_work_cb(struct k_work *work) {
         gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
     }
     
-    LOG_DBG("Twist feedback turned off");
+    LOG_INF("Twist feedback turned off");
 }
 
 static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
@@ -585,7 +690,7 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
 
     if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
         k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-        LOG_DBG("Twist feedback activated after extra delay");
+        LOG_INF("Twist feedback activated after extra delay");
     } else {
         LOG_ERR("Failed to set twist feedback GPIO after extra delay");
     }
@@ -605,7 +710,7 @@ static void p2sm_save_work_cb(struct k_work *work) {
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     } else {
-        LOG_DBG("Sensitivity settings saved");
+        LOG_INF("Sensitivity settings saved");
     }
 }
 
@@ -667,6 +772,7 @@ static struct zip_pointer_2s_mixer_config config = {
     .sync_report_ms = DT_INST_PROP(0, sync_report_ms),
     .sync_scroll_report_ms = DT_INST_PROP(0, sync_scroll_report_ms),
     .twist_interference_thres = DT_INST_PROP(0, twist_interference_thres),
+    .twist_interference_window = DT_INST_PROP(0, twist_interference_window),
     .twist_thres = DT_INST_PROP(0, twist_thres),
     .sensor1_pos = DT_INST_PROP(0, sensor1_pos),
     .sensor2_pos = DT_INST_PROP(0, sensor2_pos),

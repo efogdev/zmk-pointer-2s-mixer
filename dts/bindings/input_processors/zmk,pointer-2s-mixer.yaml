@@ -13,11 +13,15 @@ properties:
     default: 8
 
   # CPI and sync-scroll-report-ms dependent!
-  # Smaller value = less interference
+  # Smaller value = less wiggle allowed
   twist-interference-thres:
     type: int
     required: true
-    default: 10
+    default: 200
+  twist-interference-window:
+    type: int
+    required: true
+    default: 100
 
   # CPI and sync-scroll-report-ms dependent!
   # Filters out twist movements smaller than N points
