@@ -136,12 +136,11 @@ static bool scroll_percentage_filter(const struct device *dev) {
         current = current->next;
     }
     
-    if (total_entries == 0) {
+    if (total_entries < (config->twist_interference_window / config->sync_scroll_report_ms) - 1) {
         return false;
     }
     
     const int scroll_percentage = (scroll_entries * 100) / total_entries;
-    LOG_WRN("Scroll %: %d", scroll_percentage);
     return scroll_percentage >= CONFIG_POINTER_2S_MIXER_SCROLL_PERCENTAGE_THRESHOLD;
 }
 
@@ -337,8 +336,24 @@ static float calculate_twist(const struct device *dev) {
     struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
     dataframe_history_cleanup(dev, cutoff_time);
 
-    LOG_DBG("Interference: %d", abs(data->interference_accumulator));
-    if (abs(data->interference_accumulator) > config->twist_interference_thres) {
+    const int interference = abs(data->interference_accumulator);
+    if (interference > config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL) {
+        struct dataframe_history_entry *current = data->history_head;
+        while (current != NULL) {
+            struct dataframe_history_entry *next = current->next;
+            current->next = data->history_pool;
+            data->history_pool = current;
+            current = next;
+        }
+        data->history_head = NULL;
+        data->interference_accumulator = 0;
+        data->last_twist_direction = 0;
+        LOG_DBG("Discarded twist (reason = significant_translation)");
+        return 0;
+
+    }
+
+    if (interference > config->twist_interference_thres) {
         LOG_DBG("Discarded twist (reason = interference_threshold)");
         return 0;
     }
@@ -349,7 +364,6 @@ static float calculate_twist(const struct device *dev) {
     total_under_thres += abs(s2_x) < config->twist_thres;
     total_under_thres += abs(s2_y) < config->twist_thres;
     
-    LOG_DBG("Analyzing movement: (%d, %d) (%d, %d)", s1_x, s1_y, s2_x, s2_y);
     if (total_under_thres == 4) {
         LOG_DBG("Discarded movement (reason = twist_thres)");
         return 0;
