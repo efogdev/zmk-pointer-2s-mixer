@@ -44,6 +44,7 @@ struct zip_pointer_2s_mixer_config {
     const uint8_t ball_radius; // up to 127
 
     // feedback (i.e. vibration)
+    // ToDo refactor to accept any behavior
     const struct gpio_dt_spec feedback_gpios;
     const struct gpio_dt_spec feedback_extra_gpios;
     const uint16_t twist_feedback_duration, twist_feedback_threshold, twist_feedback_delay;
@@ -54,9 +55,9 @@ struct p2sm_dataframe {
 };
 
 struct dataframe_history_entry {
-    int64_t timestamp;
-    struct p2sm_dataframe dataframe;
-    float calculated_scroll;
+    uint16_t timestamp;
+    int16_t movement;
+    bool assume_scroll;
     struct dataframe_history_entry *next;
 };
 
@@ -116,20 +117,21 @@ static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
 static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe);
-static void dataframe_history_cleanup(const struct device *dev, int64_t cutoff_time);
+static bool dataframe_history_cleanup(const struct device *dev, uint16_t cutoff_time);
 
 static bool scroll_percentage_filter(const struct device *dev) {
     const struct zip_pointer_2s_mixer_data *data = dev->data;
     const struct zip_pointer_2s_mixer_config *config = dev->config;
-    const int64_t now = k_uptime_get();
-    const int64_t cutoff_time = now - config->twist_interference_window;
+    const uint16_t now = (uint16_t)k_uptime_get();
+    const uint16_t cutoff_time = now - (uint16_t)config->twist_interference_window;
     const struct dataframe_history_entry *current = data->history_head;
-    int total_entries = 0, scroll_entries = 0;
 
+    int total_entries = 0, scroll_entries = 0;
     while (current != NULL) {
-        if (current->timestamp >= cutoff_time) {
+        if ((now >= cutoff_time && current->timestamp >= cutoff_time && current->timestamp <= now) ||
+            (now < cutoff_time && (current->timestamp >= cutoff_time || current->timestamp <= now))) {
             total_entries++;
-            if (fabs(current->calculated_scroll) > config->twist_thres) {
+            if (current->assume_scroll) {
                 scroll_entries++;
             }
         }
@@ -271,7 +273,7 @@ static void apply_coef(const float coef, float *x, float *y) {
 
 static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const int64_t now = k_uptime_get();
+    const uint16_t now = (uint16_t)k_uptime_get();
     
     struct dataframe_history_entry *entry = data->history_pool;
     if (entry != NULL) {
@@ -285,35 +287,46 @@ static struct dataframe_history_entry* dataframe_history_add(const struct device
             return NULL;
         }
     }
-    
+
+    const int16_t movement = dataframe->s1_x + dataframe->s1_y + dataframe->s2_x + dataframe->s2_y;
     entry->timestamp = now;
-    entry->dataframe = *dataframe;
+    entry->movement = movement;
     entry->next = data->history_head;
     data->history_head = entry;
-    
-    const int16_t movement = dataframe->s1_x + dataframe->s1_y + dataframe->s2_x + dataframe->s2_y;
     data->interference_accumulator += movement;
+
     return entry;
 }
 
-static void dataframe_history_cleanup(const struct device *dev, const int64_t cutoff_time) {
+static bool dataframe_history_cleanup(const struct device *dev, const uint16_t cutoff_time) {
+    const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
+    const uint16_t now = (uint16_t)k_uptime_get();
     struct dataframe_history_entry **current = &data->history_head;
-    
+
+    uint8_t total_entries = 0;
     while (*current != NULL) {
-        if ((*current)->timestamp < cutoff_time) {
+        bool should_remove = false;
+        if (now >= cutoff_time) {
+            should_remove = (*current)->timestamp < cutoff_time;
+        } else {
+            should_remove = (*current)->timestamp < cutoff_time && (*current)->timestamp > now;
+        }
+        
+        if (should_remove) {
             struct dataframe_history_entry *to_remove = *current;
             *current = to_remove->next;
-            
-            const int16_t movement = to_remove->dataframe.s1_x + to_remove->dataframe.s1_y + 
-                                   to_remove->dataframe.s2_x + to_remove->dataframe.s2_y;
-            data->interference_accumulator -= movement;
+            data->interference_accumulator -= to_remove->movement;
             to_remove->next = data->history_pool;
             data->history_pool = to_remove;
         } else {
             current = &(*current)->next;
         }
+
+        total_entries++;
     }
+
+    return total_entries >= config->twist_interference_window / config->sync_scroll_report_ms - 1;
 }
 
 static float calculate_twist(const struct device *dev) {
@@ -332,11 +345,13 @@ static float calculate_twist(const struct device *dev) {
     }
 
     const struct p2sm_dataframe current_dataframe = {s1_x, s1_y, s2_x, s2_y};
-    const int64_t cutoff_time = now - config->twist_interference_window;
+    const uint16_t cutoff_time = (uint16_t)now - (uint16_t)config->twist_interference_window;
     struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
-    dataframe_history_cleanup(dev, cutoff_time);
+    const bool enough_entries = dataframe_history_cleanup(dev, cutoff_time);
 
     const int interference = abs(data->interference_accumulator);
+    LOG_DBG("interference = %d", interference);
+
     if (interference > config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL) {
         struct dataframe_history_entry *current = data->history_head;
         while (current != NULL) {
@@ -350,10 +365,9 @@ static float calculate_twist(const struct device *dev) {
         data->last_twist_direction = 0;
         LOG_DBG("Discarded twist (reason = significant_translation)");
         return 0;
-
     }
 
-    if (interference > config->twist_interference_thres) {
+    if (interference > config->twist_interference_thres && enough_entries) {
         LOG_DBG("Discarded twist (reason = interference_threshold)");
         return 0;
     }
@@ -412,7 +426,7 @@ static float calculate_twist(const struct device *dev) {
 #endif
 
         const float result = (t->direction ? -(float)(t->val1 - t->val2) : (float)(t->val2 - t->val1)) - (float)(s1_y + s2_y);
-        history_entry->calculated_scroll = result;
+        history_entry->assume_scroll = fabs(result) >= (float) config->twist_thres;
 
         data->last_twist = now;
         data->last_twist_direction = t->direction;
