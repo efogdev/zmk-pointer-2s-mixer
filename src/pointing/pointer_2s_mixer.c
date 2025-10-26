@@ -54,8 +54,8 @@ struct p2sm_dataframe {
     int16_t s1_x, s1_y, s2_x, s2_y;
 };
 
-struct dataframe_history_entry {
-    uint64_t timestamp;
+struct __attribute__((packed)) dataframe_history_entry {
+    uint32_t timestamp;
     uint16_t delta_y, x_translation, y_translation;
 };
 
@@ -71,7 +71,7 @@ struct zip_pointer_2s_mixer_data {
 #endif
 
     bool initialized;
-    int64_t last_rpt_time, last_rpt_time_twist;
+    uint32_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
     float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
     float move_coef, twist_coef;
@@ -85,7 +85,7 @@ struct zip_pointer_2s_mixer_data {
     // pre-calculated
     float rotation_matrix1[3][3], rotation_matrix2[3][3];
 
-    int64_t last_twist, debounce_start; // to filter out single events as they are probably accidental
+    uint32_t last_twist, debounce_start; // to filter out single events as they are probably accidental
     int8_t last_twist_direction; // to filter out first event in the opposite direction
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
@@ -93,7 +93,7 @@ struct zip_pointer_2s_mixer_data {
 #endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
-    int64_t last_sensor1_report, last_sensor2_report;
+    uint32_t last_sensor1_report, last_sensor2_report;
 #endif
 
     struct dataframe_history_entry *history_buffer;
@@ -106,12 +106,12 @@ static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
 static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe);
-static bool dataframe_history_cleanup(const struct device *dev, uint64_t cutoff_time);
+static bool dataframe_history_cleanup(const struct device *dev, uint32_t cutoff_time);
 
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const int64_t now = k_uptime_get();
-    int64_t dt = now - data->last_rpt_time;
+    const uint32_t now = (uint32_t) k_uptime_get();
+    uint32_t dt = now - data->last_rpt_time;
     float rotated_x = 0, rotated_y = 0;
 
     if (data->values.s1_x != 0 || data->values.s1_y != 0) {
@@ -235,15 +235,24 @@ static void apply_coef(const float coef, float *x, float *y) {
 
 static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const uint64_t now = k_uptime_get();
+    const uint32_t now = (uint32_t) k_uptime_get();
 
     if (data->history_buffer == NULL || data->max_history_entries == 0) {
         LOG_ERR("History buffer not allocated");
+        data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
+        if (data->history_buffer == NULL) {
+            data->max_history_entries = 0;
+            LOG_ERR("Failed to allocate history buffer");
+        } else {
+            memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+            LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
+        }
+
         return NULL;
     }
 
     struct dataframe_history_entry *entry = &data->history_buffer[data->history_head_index];
-    entry->timestamp = now;
+    entry->timestamp = (uint32_t) now;
     entry->x_translation = abs(dataframe->s1_x + dataframe->s2_x);
     entry->y_translation = abs(dataframe->s1_y + dataframe->s2_y);
 
@@ -255,7 +264,7 @@ static struct dataframe_history_entry* dataframe_history_add(const struct device
     return entry;
 }
 
-static bool dataframe_history_cleanup(const struct device *dev, const uint64_t cutoff_time) {
+static bool dataframe_history_cleanup(const struct device *dev, const uint32_t cutoff_time) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     const struct zip_pointer_2s_mixer_data *data = dev->data;
     if (data->history_count == 0) {
@@ -277,8 +286,8 @@ static bool dataframe_history_cleanup(const struct device *dev, const uint64_t c
 static float calculate_twist(const struct device *dev) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const int64_t now = k_uptime_get();
-    const int64_t passed = now - data->last_twist;
+    const uint32_t now = (uint32_t) k_uptime_get();
+    const uint32_t passed = now - data->last_twist;
     const int16_t s1_x = data->twist_values.s1_x;
     const int16_t s1_y = data->twist_values.s1_y;
     const int16_t s2_x = data->twist_values.s2_x;
@@ -312,11 +321,11 @@ static float calculate_twist(const struct device *dev) {
     const struct p2sm_dataframe current_dataframe = {s1_x, s1_y, s2_x, s2_y};
     struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
     if (history_entry == NULL) {
-        LOG_ERR("History buffer not allocated");
+        LOG_ERR("Failed to write twist history");
         return 0;
     }
 
-    const uint64_t cutoff = now - config->twist_interference_window;
+    const uint32_t cutoff = (uint32_t) (now - config->twist_interference_window);
     const bool enough_entries = dataframe_history_cleanup(dev, cutoff);
     if (!enough_entries) {
         LOG_DBG("Discarded movement (reason = history_not_full)");
@@ -416,7 +425,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                            const uint32_t p2, struct zmk_input_processor_state *s) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
-    const int64_t now = k_uptime_get();
+    const uint32_t now = (uint32_t) k_uptime_get();
 
     if (unlikely(!data->initialized)) {
         if (!data_init(dev)) {
@@ -570,19 +579,9 @@ static int data_init(const struct device *dev) {
     data->last_twist_direction = -1;
     data->move_coef = 1.0f;
     data->twist_coef = 1.0f;
-
-    data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 2;
-    data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
+    data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 1;
     data->history_head_index = 0;
     data->history_count = 0;
-
-    if (data->history_buffer == NULL) {
-        LOG_ERR("Failed to allocate history buffer");
-        data->max_history_entries = 0;
-    } else {
-        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-        LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
-    }
 
     // going >1 means losing precision
     // acceptable for scroll but not movement
@@ -643,7 +642,6 @@ static void twist_feedback_off_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
 
     gpio_pin_set_dt(&config->feedback_gpios, 0);
-
     if (config->feedback_extra_gpios.port != NULL) {
         gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
     }
