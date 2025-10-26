@@ -37,9 +37,13 @@ config POINTER_2S_MIXER_TWIST_REMAINDER_TTL
 
 config POINTER_2S_MIXER_TWIST_FILTER_TTL
   int "Time filter window, msec"
-  default 250
+  default 100
   help
     Singular events in this timeframe (msec) will be filtered out
+
+config POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE
+  int "Time filter debouce, msec"
+  default 24
 
 config POINTER_2S_MIXER_TWIST_NO_FILTER_THRES
   int "No-filter mode duration, msec"
@@ -73,14 +77,22 @@ config POINTER_2S_MIXER_SCROLL_DISABLES_POINTER
 
 config POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION
   int "Period of pointer inactivity"
-  default 150
+  default 100
 
-config POINTER_2S_MIXER_SCROLL_PERCENTAGE_THRESHOLD
-  int "This % of events must be twist to continue twisting"
-  default 97
+config POINTER_2S_MIXER_TWIST_MAX_VALUE
+  int "Maximum reasonable value for twist"
+  default 750
 
 config POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL
   int "Significant translation multiplier"
+  default 3
+
+config POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL
+  int "Delta Y over translation mangitude multiplier"
+  default 5
+
+config POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV
+  int "Delta Y over translation mangitude divisor"
   default 3
 
 endif # ZMK_POINTER_2S_MIXER
