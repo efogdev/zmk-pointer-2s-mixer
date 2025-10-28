@@ -280,7 +280,7 @@ static bool dataframe_history_cleanup(const struct device *dev, const uint32_t c
         }
     }
 
-    return valid_entries >= (config->twist_interference_window / config->sync_scroll_report_ms - 1);
+    return valid_entries >= (config->twist_interference_window / config->sync_scroll_report_ms - 2);
 }
 
 static float calculate_twist(const struct device *dev) {
@@ -313,6 +313,8 @@ static float calculate_twist(const struct device *dev) {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
     if (data->last_twist_direction != direction) {
         data->last_twist_direction = direction;
+        data->last_twist = now;
+        data->debounce_start = now;
         LOG_DBG("Discarded twist (reason = direction_filter)");
         return 0;
     }
@@ -473,17 +475,16 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
     if (now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
         const float twist_float = calculate_twist(dev) * data->twist_coef;
-        if (now - data->last_rpt_time_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
+        if (now - data->last_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
             data->rpt_twist_remainder = twist_float;
         } else {
             data->rpt_twist_remainder += twist_float;
         }
 
-        const int16_t twist_int = (int16_t)data->rpt_twist_remainder;
-        data->rpt_twist_remainder -= twist_int;
-
+        const int16_t twist_int = (int16_t) data->rpt_twist_remainder;
         if (twist_int != 0) {
             data->last_rpt_time_twist = now;
+            data->rpt_twist_remainder -= twist_int;
             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
         }
 
@@ -587,6 +588,15 @@ static int data_init(const struct device *dev) {
     // acceptable for scroll but not movement
     if (data->move_coef > 1.0f) {
         data->move_coef = 1.0f;
+    }
+
+    data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
+    if (data->history_buffer == NULL) {
+        data->max_history_entries = 0;
+        LOG_ERR("Failed to allocate history buffer");
+    } else {
+        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+        LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
     }
 
     LOG_DBG("Sensor mixer driver initialized");
