@@ -244,6 +244,8 @@ static struct dataframe_history_entry* dataframe_history_add(const struct device
             data->max_history_entries = 0;
             LOG_ERR("Failed to allocate history buffer");
         } else {
+            data->history_head_index = 0;
+            data->history_count = 0;
             memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
             LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
         }
@@ -359,6 +361,14 @@ static float calculate_twist(const struct device *dev) {
     const float result = ((avg_delta_y - config->twist_thres) > max_mag ? avg_delta_y - avg_translation : 0) * (s1_y > s2_y ? -1 : 1);
     const int int_result = abs((int) result);
 
+    if (avg_translation > translation_allowed) {
+        LOG_DBG("Discarded twist (reason = significant_translation)");
+        data->history_head_index = 0;
+        data->history_count = 0;
+        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+        return 0;
+    }
+
     if (int_result < config->twist_thres || int_result > CONFIG_POINTER_2S_MIXER_TWIST_MAX_VALUE) {
         LOG_DBG("Discarded twist (reason = twist_thres)");
         return 0;
@@ -388,11 +398,6 @@ static float calculate_twist(const struct device *dev) {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
     k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
-
-    // LOG_INF("timestamp: %d, twist data: delta_y=%d, total_translation=%d, result=%d", (int) now, avg_delta_y, avg_translation, (int) result);
-    // LOG_INF("timestamp: %d, twist data: max_mag=%d", (int) now, max_mag);
-    // LOG_INF("timestamp: %d, twist data: x1=%d, x2=%d, y1=%d, y2=%d, x=%d, y=%d", (int) now, s1_x, s2_x, s1_y, s2_y, s1_x + s2_x, s1_y + s2_y);
-    // LOG_INF("history size: %d", items);
 
     LOG_DBG("Scroll value calculated: %d", (int) result);
     return result;
