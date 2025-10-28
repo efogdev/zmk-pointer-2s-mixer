@@ -590,14 +590,14 @@ static int data_init(const struct device *dev) {
         data->move_coef = 1.0f;
     }
 
-    data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
-    if (data->history_buffer == NULL) {
-        data->max_history_entries = 0;
-        LOG_ERR("Failed to allocate history buffer");
-    } else {
-        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-        LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
-    }
+    // data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
+    // if (data->history_buffer == NULL) {
+    //     data->max_history_entries = 0;
+    //     LOG_ERR("Failed to allocate history buffer");
+    // } else {
+    //     memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+    //     LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
+    // }
 
     LOG_DBG("Sensor mixer driver initialized");
     LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
