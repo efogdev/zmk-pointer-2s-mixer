@@ -24,13 +24,13 @@ struct behavior_p2sm_sens_config {
     const bool scroll;
     const bool wrap;
 
-    const uint32_t step;
-    const uint32_t min_step, max_step;
-    const uint32_t max_multiplier;
+    const uint16_t step;
+    const uint16_t min_step, max_step;
+    const uint8_t max_multiplier;
 
     const struct gpio_dt_spec feedback_gpios;
     const struct gpio_dt_spec feedback_extra_gpios;
-    const uint32_t feedback_duration;
+    const uint16_t feedback_duration;
     const uint8_t feedback_wrap_pattern_len;
     const int feedback_wrap_pattern[CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_ARR_VALUES];
 };
@@ -118,7 +118,7 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
 
     const float current = cfg->scroll ? p2sm_get_twist_coef() : p2sm_get_move_coef();
     const int steps_count = (int) (current * 1000.0f / cfg->step - .5f);
-    const uint16_t d_drift = fabs(current - (float) steps_count * one_step) * 1000.0f;
+    const uint16_t d_drift = fabsf(current - (float) steps_count * one_step) * 1000.0f;
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
     log_sensitivity("  > Now: ", current, true);
@@ -194,7 +194,7 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
             wrapped = true;
 
             // specifically for toggle, because... reasons
-            if (fabs(current - new_val) <= 1e-6) {
+            if (fabsf(current - new_val) <= 1e-6f) {
                 new_val = max_value;
             }
         } else if (new_val < min_value) {
@@ -235,7 +235,6 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
             
             if (cfg->feedback_wrap_pattern_len > 0) {
                 const int pattern_duration = cfg->feedback_wrap_pattern[0];
-                
                 if (gpio_pin_set_dt(&cfg->feedback_gpios, 1) == 0) {
                     data->current_pattern_index = 1;
                     k_work_reschedule(&data->feedback_pattern_work, K_MSEC(pattern_duration));

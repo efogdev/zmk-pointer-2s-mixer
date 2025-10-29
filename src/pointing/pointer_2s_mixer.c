@@ -55,9 +55,9 @@ struct p2sm_dataframe {
     int16_t s1_x, s1_y, s2_x, s2_y;
 };
 
-struct __attribute__((packed)) dataframe_history_entry {
+// ToDo get rid of it completely?
+struct dataframe_history_entry {
     uint32_t timestamp;
-    uint16_t delta_y, x_translation, y_translation;
 };
 
 // origin = ball center
@@ -261,8 +261,6 @@ static struct dataframe_history_entry* dataframe_history_add(const struct device
 
     struct dataframe_history_entry *entry = &data->history_buffer[data->history_head_index];
     entry->timestamp = (uint32_t) now;
-    entry->x_translation = abs(dataframe->s1_x + dataframe->s2_x);
-    entry->y_translation = abs(dataframe->s1_y + dataframe->s2_y);
 
     data->history_head_index = (data->history_head_index + 1) % data->max_history_entries;
     if (data->history_count < data->max_history_entries) {
@@ -335,13 +333,13 @@ static float calculate_twist(const struct device *dev) {
 #endif
 
     const struct p2sm_dataframe current_dataframe = {s1_x, s1_y, s2_x, s2_y};
-    struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
+    const struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
     if (history_entry == NULL) {
         LOG_ERR("Failed to write twist history");
         return 0;
     }
 
-    const uint32_t cutoff = (uint32_t) (now - config->twist_interference_window);
+    const uint32_t cutoff = now - config->twist_interference_window;
     const bool enough_entries = dataframe_history_cleanup(dev, cutoff);
     if (!enough_entries) {
         LOG_DBG("Discarded movement (reason = history_not_full)");
@@ -349,9 +347,7 @@ static float calculate_twist(const struct device *dev) {
     }
 
     const uint16_t delta_y = abs(direction ? s2_y - s1_y : s1_y - s2_y);
-    history_entry->delta_y = delta_y;
-
-    const float current_translation = history_entry->x_translation + history_entry->y_translation;
+    const float current_translation = abs(s1_x + s2_x) + abs(s1_y + s2_y);
     const float current_delta_y = delta_y;
     if (!data->ema_initialized) {
         data->ema_translation = current_translation;
