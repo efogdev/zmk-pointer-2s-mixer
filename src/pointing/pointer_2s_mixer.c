@@ -88,16 +88,13 @@ struct zip_pointer_2s_mixer_data {
     uint32_t last_twist, debounce_start; // to filter out single events as they are probably accidental
     int8_t last_twist_direction; // to filter out first event in the opposite direction
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
-    uint16_t twist_accumulator;
-    bool twist_feedback_direction;
-#endif
-
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+    uint16_t twist_accumulator;
+    int8_t twist_feedback_direction;
     struct k_work_delayable twist_feedback_off_work;
     struct k_work_delayable twist_feedback_extra_delay_work;
     struct k_work_delayable twist_feedback_cooldown_work;
@@ -323,6 +320,11 @@ static float calculate_twist(const struct device *dev) {
         data->last_twist_direction = direction;
         data->last_twist = now;
         data->debounce_start = now;
+
+        data->history_head_index = 0;
+        data->history_count = 0;
+        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+
         LOG_DBG("Discarded twist (reason = direction_filter)");
         return 0;
     }
@@ -402,7 +404,7 @@ static float calculate_twist(const struct device *dev) {
     data->last_twist_direction = direction;
 
     k_work_reschedule(&data->twist_history_cleanup_work, K_MSEC(config->twist_interference_window));
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN) || IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
 
@@ -410,17 +412,22 @@ static float calculate_twist(const struct device *dev) {
     return result;
 }
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
 static void twist_filter_cleanup_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     const struct zip_pointer_2s_mixer_data *dwork_data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_filter_cleanup_work);
     const struct device *dev = dwork_data->dev;
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+    data->twist_feedback_direction = -1;
+#endif
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
     data->last_twist_direction = -1;
+#endif
+
     LOG_DBG("Direction filter data discarded (timeout)");
 }
-#endif
 
 static void twist_history_cleanup_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
@@ -558,7 +565,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                 }
 
                 k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(MAX(1, config->twist_feedback_delay)));
-                }
+            }
 
             data->twist_feedback_direction = direction;
 #endif
@@ -684,14 +691,12 @@ static int data_init(const struct device *dev) {
 
     p2sm_sens_driver_init();
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
-    k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
-#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     k_work_init_delayable(&p2sm_save_work, p2sm_save_work_cb);
 #endif
 
+    k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
     k_work_init_delayable(&data->twist_history_cleanup_work, twist_history_cleanup_work_cb);
     return 1;
 }

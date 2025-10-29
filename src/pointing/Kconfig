@@ -45,12 +45,6 @@ config POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE
   int "Time filter debouce, msec"
   default 24
 
-config POINTER_2S_MIXER_TWIST_NO_FILTER_THRES
-  int "No-filter mode duration, msec"
-  default 12
-  help
-    Do not apply threshold filters this amount of msec after previous scroll event
-
 config POINTER_2S_MIXER_DIRECTION_FILTER_EN
   bool "Direction filter"
   default y
