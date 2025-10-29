@@ -95,4 +95,12 @@ config POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV
   int "Delta Y over translation mangitude divisor"
   default 3
 
+config POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS
+  int "Maximum continuous feedback duration, msec"
+  default 150
+
+config POINTER_2S_MIXER_FEEDBACK_COOLDOWN
+  int "Feedback cooldown, msec"
+  default 25
+
 endif # ZMK_POINTER_2S_MIXER

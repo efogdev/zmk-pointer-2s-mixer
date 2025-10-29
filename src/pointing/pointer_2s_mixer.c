@@ -26,6 +26,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work);
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
 static void twist_feedback_off_work_cb(struct k_work *work);
 static void twist_feedback_extra_delay_work_cb(struct k_work *work);
+static void twist_feedback_cooldown_work_cb(struct k_work *work);
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
@@ -62,19 +63,18 @@ struct __attribute__((packed)) dataframe_history_entry {
 // origin = ball center
 struct zip_pointer_2s_mixer_data {
     const struct device *dev;
-    struct k_work_delayable twist_filter_cleanup_work;
-
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
-    struct k_work_delayable twist_feedback_off_work;
-    struct k_work_delayable twist_feedback_extra_delay_work;
-    int previous_feedback_extra_state;
-#endif
+    struct k_work_delayable twist_filter_cleanup_work, twist_history_cleanup_work;
 
     bool initialized;
     uint32_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
     float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
     float move_coef, twist_coef;
+
+    struct dataframe_history_entry *history_buffer;
+    uint8_t max_history_entries;
+    uint8_t history_head_index;
+    uint8_t history_count;
 
     // accumulates NON-transformed X, Y movements
     struct p2sm_dataframe values;
@@ -89,17 +89,23 @@ struct zip_pointer_2s_mixer_data {
     int8_t last_twist_direction; // to filter out first event in the opposite direction
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
-    uint16_t twist_accumulator; // for feedback
+    uint16_t twist_accumulator;
+    bool twist_feedback_direction;
 #endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
 
-    struct dataframe_history_entry *history_buffer;
-    uint8_t max_history_entries;
-    uint8_t history_head_index;
-    uint8_t history_count;
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
+    struct k_work_delayable twist_feedback_off_work;
+    struct k_work_delayable twist_feedback_extra_delay_work;
+    struct k_work_delayable twist_feedback_cooldown_work;
+    int previous_feedback_extra_state;
+    uint32_t feedback_start_time;
+    uint32_t feedback_cooldown_until;
+    bool feedback_is_in_cooldown;
+#endif
 };
 
 static int data_init(const struct device *dev);
@@ -282,7 +288,7 @@ static bool dataframe_history_cleanup(const struct device *dev, const uint32_t c
         }
     }
 
-    return valid_entries >= (config->twist_interference_window / config->sync_scroll_report_ms - 2);
+    return valid_entries >= (config->twist_interference_window / config->sync_scroll_report_ms);
 }
 
 static float calculate_twist(const struct device *dev) {
@@ -395,6 +401,7 @@ static float calculate_twist(const struct device *dev) {
     data->last_twist = now;
     data->last_twist_direction = direction;
 
+    k_work_reschedule(&data->twist_history_cleanup_work, K_MSEC(config->twist_interference_window));
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
     k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
@@ -414,6 +421,19 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
     LOG_DBG("Direction filter data discarded (timeout)");
 }
 #endif
+
+static void twist_history_cleanup_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    const struct zip_pointer_2s_mixer_data *dwork_data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_filter_cleanup_work);
+    const struct device *dev = dwork_data->dev;
+    struct zip_pointer_2s_mixer_data *data = dev->data;
+
+    data->history_head_index = 0;
+    data->history_count = 0;
+    memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+
+    LOG_DBG("Twist history discarded (timeout)");
+}
 
 static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
     const float distance = sqrtf(x*x + y*y + z*z);
@@ -491,36 +511,58 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             data->last_rpt_time_twist = now;
             data->rpt_twist_remainder -= twist_int;
             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
-        }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
-        data->twist_accumulator += abs(twist_int);
+            data->twist_accumulator += abs(twist_int);
 
-        if (config->feedback_gpios.port != NULL &&
-            data->twist_accumulator >= config->twist_feedback_threshold &&
-            config->twist_feedback_threshold > 0) {
-            data->twist_accumulator = 0;
+            const bool direction = twist_float > 0;
+            if (config->feedback_gpios.port != NULL &&
+                (data->twist_accumulator >= config->twist_feedback_threshold || data->twist_feedback_direction != direction) &&
+                config->twist_feedback_threshold > 0) {
+                data->twist_accumulator = 0;
 
-            if (config->feedback_extra_gpios.port != NULL) {
-                data->previous_feedback_extra_state = gpio_pin_get_dt(&config->feedback_extra_gpios);
-                if (gpio_pin_set_dt(&config->feedback_extra_gpios, 1) != 0) {
-                    LOG_ERR("Failed to set twist feedback extra GPIO");
+                if (data->feedback_is_in_cooldown && now < data->feedback_cooldown_until) {
+                    LOG_DBG("Twist feedback skipped (in cooldown until %d)", data->feedback_cooldown_until - now);
+                    data->twist_feedback_direction = direction;
+                    return 0;
                 }
-            }
 
-            if (config->twist_feedback_delay > 0) {
-                k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(config->twist_feedback_delay));
-                LOG_DBG("Twist feedback extra GPIO activated, scheduling main feedback after %d ms delay", config->twist_feedback_delay);
-            } else {
-                if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
-                    k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-                    LOG_DBG("Twist feedback activated immediately (accumulator: %d)", data->twist_accumulator);
-                } else {
-                    LOG_ERR("Failed to set twist feedback GPIO");
+                if (data->feedback_start_time > 0 && (now - data->feedback_start_time) >= CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS) {
+                    k_work_cancel_delayable(&data->twist_feedback_off_work);
+                    k_work_cancel_delayable(&data->twist_feedback_extra_delay_work);
+
+                    gpio_pin_set_dt(&config->feedback_gpios, 0);
+                    if (config->feedback_extra_gpios.port != NULL) {
+                        gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
+                    }
+
+                    data->feedback_start_time = 0;
+                    data->feedback_is_in_cooldown = true;
+                    data->feedback_cooldown_until = now + CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN;
+                    k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN));
+
+                    LOG_DBG("Twist feedback forced off after max continuous duration, cooldown for %d ms", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
+                    data->twist_feedback_direction = direction;
+                    return 0;
                 }
-            }
-        }
+
+                if (data->feedback_start_time == 0) {
+                    data->feedback_start_time = now;
+                }
+
+                if (config->feedback_extra_gpios.port != NULL) {
+                    data->previous_feedback_extra_state = gpio_pin_get_dt(&config->feedback_extra_gpios);
+                    if (gpio_pin_set_dt(&config->feedback_extra_gpios, 1) != 0) {
+                        LOG_ERR("Failed to set twist feedback extra GPIO");
+                    }
+                }
+
+                k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(MAX(1, config->twist_feedback_delay)));
+                }
+
+            data->twist_feedback_direction = direction;
 #endif
+        }
     }
 
     return 0;
@@ -595,14 +637,13 @@ static int data_init(const struct device *dev) {
         data->move_coef = 1.0f;
     }
 
-    // data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
-    // if (data->history_buffer == NULL) {
-    //     data->max_history_entries = 0;
-    //     LOG_ERR("Failed to allocate history buffer");
-    // } else {
-    //     memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-    //     LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
-    // }
+    data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
+    if (data->history_buffer == NULL) {
+        LOG_ERR("Failed to allocate history buffer");
+    } else {
+        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
+        LOG_INF("Circular history buffer allocated: %d entries", data->max_history_entries);
+    }
 
     LOG_DBG("Sensor mixer driver initialized");
     LOG_DBG("  > Ball radius: %d", (int) config->ball_radius);
@@ -631,6 +672,11 @@ static int data_init(const struct device *dev) {
     } else {
         LOG_DBG("No extra feedback set up for twist");
     }
+
+    data->feedback_start_time = 0;
+    data->feedback_cooldown_until = 0;
+    data->feedback_is_in_cooldown = false;
+    k_work_init_delayable(&data->twist_feedback_cooldown_work, twist_feedback_cooldown_work_cb);
 #endif
 
     g_dev = (struct device *) dev;
@@ -646,6 +692,7 @@ static int data_init(const struct device *dev) {
     k_work_init_delayable(&p2sm_save_work, p2sm_save_work_cb);
 #endif
 
+    k_work_init_delayable(&data->twist_history_cleanup_work, twist_history_cleanup_work_cb);
     return 1;
 }
 
@@ -669,13 +716,36 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
     struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_extra_delay_work);
     const struct device *dev = data->dev;
     const struct zip_pointer_2s_mixer_config *config = dev->config;
+    const uint32_t now = (uint32_t) k_uptime_get();
+    const uint16_t elapsed = data->feedback_start_time > 0 ? now - data->feedback_start_time : 0;
+    const uint16_t remaining_duration = CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS > elapsed
+        ? CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS - elapsed  : 0;
+    const uint16_t feedback_duration = config->twist_feedback_duration < remaining_duration
+        ? config->twist_feedback_duration : remaining_duration;
 
-    if (gpio_pin_set_dt(&config->feedback_gpios, 1) == 0) {
-        k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(config->twist_feedback_duration));
-        LOG_DBG("Twist feedback activated after extra delay");
+    if (feedback_duration > 0) {
+        gpio_pin_set_dt(&config->feedback_gpios, 1);
+        k_work_reschedule(&data->twist_feedback_off_work, K_MSEC(feedback_duration));
+        LOG_DBG("Twist feedback activated after extra delay for %d ms (remaining: %d ms)", feedback_duration, remaining_duration);
     } else {
-        LOG_ERR("Failed to set twist feedback GPIO after extra delay");
+        k_work_cancel_delayable(&data->twist_feedback_off_work);
+        k_work_cancel_delayable(&data->twist_feedback_cooldown_work);
+        gpio_pin_set_dt(&config->feedback_gpios, 0);
+        data->feedback_start_time = 0;
+        data->feedback_is_in_cooldown = true;
+        data->feedback_cooldown_until = now + CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN;
+        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN));
+        LOG_DBG("Twist feedback after delay immediately off, max duration reached, cooldown for %d ms", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
     }
+}
+
+static void twist_feedback_cooldown_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_cooldown_work);
+
+    data->feedback_is_in_cooldown = false;
+    data->feedback_cooldown_until = 0;
+    LOG_DBG("Twist feedback cooldown period ended");
 }
 #endif
 
