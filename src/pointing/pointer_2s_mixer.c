@@ -88,6 +88,9 @@ struct zip_pointer_2s_mixer_data {
     uint32_t last_twist, debounce_start; // to filter out single events as they are probably accidental
     int8_t last_twist_direction; // to filter out first event in the opposite direction
 
+    float ema_delta_y, ema_translation;
+    bool ema_initialized;
+
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
@@ -320,6 +323,7 @@ static float calculate_twist(const struct device *dev) {
         data->last_twist_direction = direction;
         data->last_twist = now;
         data->debounce_start = now;
+        data->ema_initialized = false;
 
         data->history_head_index = 0;
         data->history_count = 0;
@@ -347,30 +351,27 @@ static float calculate_twist(const struct device *dev) {
     const uint16_t delta_y = abs(direction ? s2_y - s1_y : s1_y - s2_y);
     history_entry->delta_y = delta_y;
 
-    int total_translation = 0, total_delta_y = 0;
-    uint8_t items = data->history_count;
-    const uint8_t oldest_index = (data->history_head_index - data->history_count + data->max_history_entries) % data->max_history_entries;
-
-    for (uint8_t i = 0; i < data->history_count; i++) {
-        const uint8_t index = (oldest_index + i) % data->max_history_entries;
-        const struct dataframe_history_entry *entry = &data->history_buffer[index];
-        if (entry->timestamp < cutoff) {
-            items--;
-            continue;
-        }
-
-        total_translation += entry->x_translation + entry->y_translation;
-        total_delta_y += entry->delta_y;
+    const float current_translation = history_entry->x_translation + history_entry->y_translation;
+    const float current_delta_y = delta_y;
+    if (!data->ema_initialized) {
+        data->ema_translation = current_translation;
+        data->ema_delta_y = current_delta_y;
+        data->ema_initialized = true;
+    } else {
+        const float alpha = (float) CONFIG_POINTER_2S_MIXER_EMA_ALPHA / 100;
+        data->ema_translation = alpha * current_translation + (1.0f - alpha) * data->ema_translation;
+        data->ema_delta_y = alpha * current_delta_y + (1.0f - alpha) * data->ema_delta_y;
     }
 
-    const uint16_t avg_translation = items > 0 ? abs(total_translation) / items : 0;
-    const uint16_t avg_delta_y = items > 0 ? total_delta_y / items : 0;
+    const uint16_t avg_translation = (uint16_t) data->ema_translation;
+    const uint16_t avg_delta_y = (uint16_t) data->ema_delta_y;
     const uint16_t max_mag = avg_translation * CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL / CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV;
     const float result = ((avg_delta_y - config->twist_thres) > max_mag ? avg_delta_y - avg_translation : 0) * (s1_y > s2_y ? -1 : 1);
     const int int_result = abs((int) result);
 
     if (avg_translation > translation_allowed) {
         LOG_DBG("Discarded twist (reason = significant_translation)");
+        data->ema_initialized = false;
         data->history_head_index = 0;
         data->history_count = 0;
         memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
@@ -637,6 +638,10 @@ static int data_init(const struct device *dev) {
     data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 1;
     data->history_head_index = 0;
     data->history_count = 0;
+    
+    data->ema_delta_y = 0.0f;
+    data->ema_translation = 0.0f;
+    data->ema_initialized = false;
 
     // going >1 means losing precision
     // acceptable for scroll but not movement

@@ -97,4 +97,8 @@ config POINTER_2S_MIXER_FEEDBACK_COOLDOWN
   int "Feedback cooldown, msec"
   default 25
 
+config POINTER_2S_MIXER_EMA_ALPHA
+  int "Alpha-value for EMA filter, N/100"
+  default 25
+
 endif # ZMK_POINTER_2S_MIXER
