@@ -322,11 +322,9 @@ static float calculate_twist(const struct device *dev) {
         data->last_twist = now;
         data->debounce_start = now;
         data->ema_initialized = false;
-
         data->history_head_index = 0;
         data->history_count = 0;
         memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-
         LOG_DBG("Discarded twist (reason = direction_filter)");
         return 0;
     }
@@ -341,22 +339,21 @@ static float calculate_twist(const struct device *dev) {
 
     const uint32_t cutoff = now - config->twist_interference_window;
     const bool enough_entries = dataframe_history_cleanup(dev, cutoff);
-    if (!enough_entries) {
+    if (!enough_entries && data->max_history_entries > 0) {
         LOG_DBG("Discarded movement (reason = history_not_full)");
         return 0;
     }
 
-    const uint16_t delta_y = abs(direction ? s2_y - s1_y : s1_y - s2_y);
-    const float current_translation = abs(s1_x + s2_x) + abs(s1_y + s2_y);
-    const float current_delta_y = delta_y;
+    const float delta_y = (float) abs(direction ? s2_y - s1_y : s1_y - s2_y);
+    const float translation = abs(s1_x + s2_x) + abs(s1_y + s2_y);
     if (!data->ema_initialized) {
-        data->ema_translation = current_translation;
-        data->ema_delta_y = current_delta_y;
+        data->ema_translation = translation;
+        data->ema_delta_y = delta_y;
         data->ema_initialized = true;
     } else {
         const float alpha = (float) CONFIG_POINTER_2S_MIXER_EMA_ALPHA / 100;
-        data->ema_translation = alpha * current_translation + (1.0f - alpha) * data->ema_translation;
-        data->ema_delta_y = alpha * current_delta_y + (1.0f - alpha) * data->ema_delta_y;
+        data->ema_translation = alpha * translation + (1.0f - alpha) * data->ema_translation;
+        data->ema_delta_y = alpha * delta_y + (1.0f - alpha) * data->ema_delta_y;
     }
 
     const uint16_t avg_translation = (uint16_t) data->ema_translation;
@@ -692,7 +689,6 @@ static int data_init(const struct device *dev) {
 
     p2sm_sens_driver_init();
 
-
 #if IS_ENABLED(CONFIG_SETTINGS)
     k_work_init_delayable(&p2sm_save_work, p2sm_save_work_cb);
 #endif
@@ -830,7 +826,7 @@ static struct zip_pointer_2s_mixer_config config = {
     .sync_report_ms = DT_INST_PROP(0, sync_report_ms),
     .sync_scroll_report_ms = DT_INST_PROP(0, sync_scroll_report_ms),
     .twist_interference_thres = DT_INST_PROP(0, twist_interference_thres),
-    .twist_interference_window = DT_INST_PROP(0, twist_interference_window),
+    .twist_interference_window = DT_INST_PROP_OR(0, twist_interference_window, 0),
     .twist_thres = DT_INST_PROP(0, twist_thres),
     .sensor1_pos = DT_INST_PROP(0, sensor1_pos),
     .sensor2_pos = DT_INST_PROP(0, sensor2_pos),

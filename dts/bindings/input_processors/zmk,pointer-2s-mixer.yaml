@@ -20,8 +20,8 @@ properties:
     default: 200
   twist-interference-window:
     type: int
-    required: true
     default: 100
+    deprecated: true
 
   # CPI and sync-scroll-report-ms dependent!
   # Filters out twist movements smaller than N points
