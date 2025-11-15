@@ -304,6 +304,8 @@ static float calculate_twist(const struct device *dev) {
         return 0;
     }
 
+    LOG_INF("timestamp: %d, twist data: x1=%d, x2=%d, y1=%d, y2=%d, x=%d, y=%d", (int) now, s1_x, s2_x, s1_y, s2_y, s1_x + s2_x, s1_y + s2_y);
+
     if (abs(s1_y) < config->twist_thres || abs(s2_y) < config->twist_thres) {
         LOG_DBG("Discarded movement (reason = twist_thres)");
         return 0;
@@ -402,6 +404,8 @@ static float calculate_twist(const struct device *dev) {
     k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
 
+    LOG_INF("timestamp: %d, twist data: delta_y=%d, total_translation=%d, result=%d", (int) now, avg_delta_y, avg_translation, (int) result);
+    LOG_INF("timestamp: %d, twist data: max_mag=%d", (int) now, max_mag);
     LOG_DBG("Scroll value calculated: %d", (int) result);
     return result;
 }
