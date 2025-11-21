@@ -91,6 +91,11 @@ struct zip_pointer_2s_mixer_data {
     float ema_delta_y, ema_translation;
     bool ema_initialized;
 
+    bool twist_accel_enabled;
+    float twist_accel_value;
+    uint32_t last_twist_time;
+    float last_twist_magnitude;
+
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
@@ -500,7 +505,21 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     }
 
     if (now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
-        const float twist_float = calculate_twist(dev) * data->twist_coef;
+        float twist_float = calculate_twist(dev) * data->twist_coef;
+        
+        if (data->twist_accel_enabled && twist_float != 0 && data->twist_accel_value - 1.0f > 1e-4f) {
+            const float current_magnitude = fabsf(twist_float);
+            const uint32_t time_delta = now - data->last_twist_time;
+            if (time_delta > 0 && time_delta < 1000) {
+                const float velocity = current_magnitude / (time_delta / 1000.0f);
+                const float accel_factor = 1.0f + (velocity / 1000.0f) * (data->twist_accel_value - 1.0f);
+                twist_float *= accel_factor;
+            }
+            
+            data->last_twist_time = now;
+            data->last_twist_magnitude = current_magnitude;
+        }
+        
         if (now - data->last_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
             data->rpt_twist_remainder = twist_float;
         } else {
@@ -636,6 +655,11 @@ static int data_init(const struct device *dev) {
     data->ema_translation = 0.0f;
     data->ema_initialized = false;
 
+    data->twist_accel_enabled = false;
+    data->twist_accel_value = 1.0f;
+    data->last_twist_time = 0;
+    data->last_twist_magnitude = 0.0f;
+
     // going >1 means losing precision
     // acceptable for scroll but not movement
     if (data->move_coef > 1.0f) {
@@ -688,6 +712,7 @@ static int data_init(const struct device *dev) {
     data->initialized = true;
 
     p2sm_sens_driver_init();
+    p2sm_accel_driver_init();
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     k_work_init_delayable(&p2sm_save_work, p2sm_save_work_cb);
@@ -760,15 +785,23 @@ static void p2sm_save_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     const float values[2] = { data->move_coef, data->twist_coef };
 
-    const int err = settings_save_one(P2SM_SETTINGS_PREFIX, values, sizeof(values));
+    int err = settings_save_one(P2SM_SETTINGS_PREFIX, values, sizeof(values));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     } else {
         LOG_DBG("Sensitivity settings saved");
     }
+
+    const float accel[2] = { data->twist_accel_enabled ? 1.0f : 0.0f, data->twist_accel_value };
+    err = settings_save_one(P2SM_ACCEL_SETTINGS_PREFIX, accel, sizeof(accel));
+    if (err < 0) {
+        LOG_ERR("Failed to save settings %d", err);
+    } else {
+        LOG_DBG("Acceleration settings saved");
+    }
 }
 
-static void p2sm_save_sensitivity() {
+static void p2sm_save_config() {
     k_work_reschedule(&p2sm_save_work, K_MSEC(CONFIG_POINTER_2S_MIXER_SETTINGS_SAVE_DELAY));
 }
 #endif
@@ -803,7 +836,7 @@ void p2sm_set_move_coef(const float coef) {
     data->move_coef = coef;
 
 #if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_sensitivity();
+    p2sm_save_config();
 #endif
 }
 
@@ -817,7 +850,55 @@ void p2sm_set_twist_coef(const float coef) {
     data->twist_coef = coef;
 
 #if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_sensitivity();
+    p2sm_save_config();
+#endif
+}
+
+bool p2sm_get_twist_accel_enabled() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return false;
+    }
+
+    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    return data->twist_accel_enabled;
+}
+
+void p2sm_set_twist_accel_enabled(const bool enabled) {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->twist_accel_enabled = enabled;
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    p2sm_save_config();
+#endif
+}
+
+float p2sm_get_twist_accel_value() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return 0;
+    }
+
+    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    return data->twist_accel_value;
+}
+
+void p2sm_set_twist_accel_value(const float value) {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->twist_accel_value = value;
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    p2sm_save_config();
 #endif
 }
 

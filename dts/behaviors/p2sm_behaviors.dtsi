@@ -48,5 +48,25 @@
 
 			wrap;
 		};
+
+		/omit-if-no-ref/ p2sm_accel_toggle: p2sm_accel_toggle {
+			compatible = "zmk,behavior-p2sm-accel-toggle";
+			#binding-cells = <1>;
+			display-name = "Toggle twist acceleration";
+			feedback-duration = <85>;
+		};
+
+		/omit-if-no-ref/ p2sm_accel_adj: p2sm_accel_adj {
+			compatible = "zmk,behavior-p2sm-accel-adj";
+			#binding-cells = <2>;
+			display-name = "Twist acceleration";
+			step = <50>;
+			min-step = <21>;
+			max-step = <25>;
+			max-multiplier = <2>;
+			feedback-duration = <85>;
+			feedback-wrap-pattern = <0 10 65 25 65 25 65>;
+			wrap;
+		};
 	};
 };
