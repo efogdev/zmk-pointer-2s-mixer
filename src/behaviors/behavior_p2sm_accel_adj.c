@@ -13,13 +13,13 @@
 
 #define DT_DRV_COMPAT zmk_behavior_p2sm_accel_adj
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
-#if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
 static bool initialized = false;
 static uint8_t g_dev_num = 0;
 static const char* g_devices[CONFIG_POINTER_2S_MIXER_SENS_MAX_DEVICES] = { NULL };
 static float g_from_settings[2] = { -1, -1 };
 
+#if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 struct behavior_p2sm_accel_adj_config {
     const bool wrap;
 
@@ -254,23 +254,6 @@ static void feedback_pattern_work_cb(struct k_work *work) {
     k_work_reschedule(&data->feedback_pattern_work, K_MSEC(pattern_duration));
 }
 
-void p2sm_accel_driver_init() {
-    if (initialized) {
-        LOG_ERR("Acceleration driver already initialized!");
-        return;
-    }
-
-    LOG_DBG("Initializing acceleration cycling driver…");
-    if (g_from_settings[0] != -1 && g_from_settings[1] != -1) {
-        p2sm_set_twist_accel_enabled(g_from_settings[0] > 0.5f);
-        p2sm_set_twist_accel_value(g_from_settings[1]);
-    } else {
-        LOG_DBG("Acceleration values not found in settings");
-    }
-
-    initialized = true;
-}
-
 static int behavior_p2sm_accel_adj_init(const struct device *dev) {
     const struct behavior_p2sm_accel_adj_config *cfg = dev->config;
     struct behavior_p2sm_accel_adj_data *data = dev->data;
@@ -364,3 +347,20 @@ SETTINGS_STATIC_HANDLER_DEFINE(twist_accel_cycle, P2SM_ACCEL_SETTINGS_PREFIX, NU
 #endif
 
 #endif /* DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT) */
+
+void p2sm_accel_driver_init() {
+    if (initialized) {
+        LOG_ERR("Acceleration driver already initialized!");
+        return;
+    }
+
+    LOG_DBG("Initializing acceleration cycling driver…");
+    if (g_from_settings[0] != -1 && g_from_settings[1] != -1) {
+        p2sm_set_twist_accel_enabled(g_from_settings[0] > 0.5f);
+        p2sm_set_twist_accel_value(g_from_settings[1]);
+    } else {
+        LOG_DBG("Acceleration values not found in settings");
+    }
+
+    initialized = true;
+}
