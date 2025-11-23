@@ -504,7 +504,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         process_and_report(dev);
     }
 
-    if (now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
+    if (data->twist_enabled && now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
         float twist_float = calculate_twist(dev) * data->twist_coef;
         
         if (data->twist_accel_enabled && twist_float != 0 && data->twist_accel_value - 1.0f > 1e-4f) {
