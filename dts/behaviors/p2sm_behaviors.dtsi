@@ -68,5 +68,12 @@
 			feedback-wrap-pattern = <0 10 65 25 65 25 65>;
 			wrap;
 		};
+
+		p2sm_twist_toggle: p2sm_twist_toggle {
+			compatible = "zmk,behavior-p2sm-twist-toggle";
+			#binding-cells = <0>;
+			display-name = "Toggle twist scroll";
+			feedback-duration = <200>;
+		};
 	};
 };

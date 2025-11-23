@@ -65,7 +65,7 @@ struct zip_pointer_2s_mixer_data {
     const struct device *dev;
     struct k_work_delayable twist_filter_cleanup_work, twist_history_cleanup_work;
 
-    bool initialized;
+    bool initialized, twist_enabled;
     uint32_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
     float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
@@ -900,6 +900,16 @@ void p2sm_set_twist_accel_value(const float value) {
 #if IS_ENABLED(CONFIG_SETTINGS)
     p2sm_save_config();
 #endif
+}
+
+void p2sm_toggle_twist() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->twist_enabled = !data->twist_enabled;
 }
 
 static struct zip_pointer_2s_mixer_data data = {};
