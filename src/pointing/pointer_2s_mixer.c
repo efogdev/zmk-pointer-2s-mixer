@@ -655,6 +655,7 @@ static int data_init(const struct device *dev) {
     data->ema_translation = 0.0f;
     data->ema_initialized = false;
 
+    data->twist_enabled = true;
     data->twist_accel_enabled = false;
     data->twist_accel_value = 1.0f;
     data->last_twist_time = 0;
