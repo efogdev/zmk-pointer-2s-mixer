@@ -22,7 +22,7 @@ static float g_from_settings[2] = { -1, -1 };
 
 struct behavior_p2sm_sens_config {
     const bool scroll;
-    const bool wrap;
+    const bool wrap, feedback_on_limit;
 
     const uint16_t step;
     const uint16_t min_step, max_step;
@@ -211,6 +211,10 @@ static int on_p2sm_binding_pressed(struct zmk_behavior_binding *binding, struct 
             wrapped = true;
         }
     }
+
+	if (!cfg->wrap && cfg->feedback_on_limit) {
+		wrapped = true;
+	}
 
     LOG_DBG("Sensitivity %s by %d step(s)", direction ? "increased" : "decreased", steps);
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
@@ -404,6 +408,7 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
     static const struct behavior_p2sm_sens_config behavior_p2sm_sens_config_##n = {                   \
         .step = DT_INST_PROP(n, step),                                                                \
         .wrap = DT_INST_PROP_OR(n, wrap, true),                                                       \
+        .feedback_on_limit = DT_INST_PROP_OR(n, feedback_on_limit, false),                            \
         .max_multiplier = DT_INST_PROP_OR(n, max_multiplier, 1),                                      \
         .min_step = DT_INST_PROP_OR(n, min_step, 1),                                                  \
         .max_step = DT_INST_PROP_OR(n, max_step, 1000),                                               \

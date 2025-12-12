@@ -27,6 +27,10 @@ properties:
   wrap:
     type: boolean
 
+  # execute wrap pattern when limit hit
+  feedback-on-limit:
+    type: boolean
+
   feedback-gpios:
     type: phandle-array
   feedback-extra-gpios:
