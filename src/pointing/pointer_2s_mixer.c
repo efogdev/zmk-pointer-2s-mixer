@@ -248,11 +248,10 @@ static struct dataframe_history_entry* dataframe_history_add(const struct device
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const uint32_t now = (uint32_t) k_uptime_get();
 
-    if (data->history_buffer == NULL || data->max_history_entries == 0) {
-        LOG_ERR("History buffer not allocated");
+    if (data->history_buffer == NULL) {
+        LOG_WRN("History buffer not allocated");
         data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
         if (data->history_buffer == NULL) {
-            data->max_history_entries = 0;
             LOG_ERR("Failed to allocate history buffer");
         } else {
             data->history_head_index = 0;
@@ -278,6 +277,11 @@ static struct dataframe_history_entry* dataframe_history_add(const struct device
 static bool dataframe_history_cleanup(const struct device *dev, const uint32_t cutoff_time) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     const struct zip_pointer_2s_mixer_data *data = dev->data;
+
+    if (config->sync_scroll_report_ms == 0) {
+        return true;
+    }
+
     if (data->history_count == 0) {
         return false;
     }
@@ -344,7 +348,7 @@ static float calculate_twist(const struct device *dev) {
 
     const uint32_t cutoff = now - config->twist_interference_window;
     const bool enough_entries = dataframe_history_cleanup(dev, cutoff);
-    if (!enough_entries && data->max_history_entries > 0) {
+    if (!enough_entries) {
         LOG_DBG("Discarded movement (reason = history_not_full)");
         return 0;
     }
@@ -366,6 +370,8 @@ static float calculate_twist(const struct device *dev) {
     const uint16_t max_mag = avg_translation * CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL / CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV;
     const float result = ((avg_delta_y - config->twist_thres) > max_mag ? avg_delta_y - avg_translation : 0) * (s1_y > s2_y ? -1 : 1);
     const int int_result = abs((int) result);
+
+    // LOG_INF("timestamp: %d, twist data: delta_y=%d, translation=%d", (int) now, avg_delta_y, avg_translation);
 
     if (avg_translation > translation_allowed) {
         LOG_DBG("Discarded twist (reason = significant_translation)");
@@ -430,7 +436,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
 
 static void twist_history_cleanup_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    const struct zip_pointer_2s_mixer_data *dwork_data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_filter_cleanup_work);
+    const struct zip_pointer_2s_mixer_data *dwork_data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_history_cleanup_work);
     const struct device *dev = dwork_data->dev;
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
@@ -647,7 +653,13 @@ static int data_init(const struct device *dev) {
     data->last_twist_direction = -1;
     data->move_coef = 1.0f;
     data->twist_coef = 1.0f;
-    data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 1;
+
+    if (config->sync_scroll_report_ms != 0) {
+        data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 1;
+    } else {
+        data->max_history_entries = 1;
+    }
+
     data->history_head_index = 0;
     data->history_count = 0;
     

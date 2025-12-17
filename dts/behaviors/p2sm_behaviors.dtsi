@@ -1,7 +1,7 @@
 / {
 	behaviors {
 		// 12.5% step
-		/omit-if-no-ref/ p2sm_sensitivity: p2sm_sensitivity {
+		/omit-if-no-ref/ sens: p2sm_sensitivity {
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
 			display-name = "Pointer sensitivity";
@@ -13,7 +13,7 @@
 		};
 
 		// 25% step; scroll
-		/omit-if-no-ref/ p2sm_scroll_sensitivity: p2sm_scroll_sensitivity {
+		/omit-if-no-ref/ scrlsens: p2sm_scroll_sensitivity {
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
 			display-name = "Scroll sensitivity";
@@ -27,7 +27,7 @@
 		};
 
 		// example of sensitivity toggle option
-		/omit-if-no-ref/ p2sm_sens_toggle: p2sm_sens_toggle {
+		/omit-if-no-ref/ scrlsenstog: p2sm_sens_toggle {
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
 			feedback-duration = <250>;
