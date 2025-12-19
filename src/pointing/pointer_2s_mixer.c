@@ -915,6 +915,11 @@ void p2sm_set_twist_accel_value(const float value) {
 #endif
 }
 
+bool p2sm_twist_enabled() {
+    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    return data->twist_enabled;
+}
+
 void p2sm_toggle_twist() {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");

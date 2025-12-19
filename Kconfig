@@ -7,3 +7,4 @@
 
 rsource "src/pointing/Kconfig"
 rsource "src/behaviors/Kconfig"
+rsource "src/shell/Kconfig"

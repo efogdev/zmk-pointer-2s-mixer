@@ -13,4 +13,5 @@ void p2sm_set_twist_accel_enabled(bool enabled);
 float p2sm_get_twist_accel_value();
 void p2sm_set_twist_accel_value(float value);
 
+bool p2sm_twist_enabled();
 void p2sm_toggle_twist();

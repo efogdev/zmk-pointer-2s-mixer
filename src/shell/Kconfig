@@ -1,0 +1,7 @@
+if SHELL
+
+config ZMK_P2SM_SHELL
+bool "Sensor mixer shell commands"
+default y
+
+endif
