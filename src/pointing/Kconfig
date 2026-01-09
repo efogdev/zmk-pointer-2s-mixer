@@ -101,4 +101,12 @@ config POINTER_2S_MIXER_EMA_ALPHA
   int "Alpha-value for EMA filter, N/100"
   default 25
 
+config POINTER_2S_MIXER_STEADY_THRES
+  int "Non significant movement threshold"
+  default 5
+
+config POINTER_2S_MIXER_STEADY_COOLDOWN
+  int "Twist after movement, msec"
+  default 100
+
 endif # ZMK_POINTER_2S_MIXER

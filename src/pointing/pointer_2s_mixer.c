@@ -96,6 +96,8 @@ struct zip_pointer_2s_mixer_data {
     uint32_t last_twist_time;
     float last_twist_magnitude;
 
+    uint32_t last_significant_movement;
+
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
@@ -179,6 +181,10 @@ static int process_and_report(const struct device *dev) {
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
+        if (abs(data->rpt_x) > CONFIG_POINTER_2S_MIXER_STEADY_THRES || abs(data->rpt_y) > CONFIG_POINTER_2S_MIXER_STEADY_THRES) {
+            data->last_significant_movement = now;
+        }
+
         if (have_x) {
             input_report(dev, INPUT_EV_REL, INPUT_REL_X, data->rpt_x, !have_y, K_NO_WAIT);
             data->rpt_x = 0;
@@ -400,6 +406,13 @@ static float calculate_twist(const struct device *dev) {
 
     if (passed > CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL) {
         LOG_DBG("Discarded twist (reason = time_filter)");
+        data->debounce_start = now;
+        data->last_twist = now;
+        return 0;
+    }
+
+    if (data->last_significant_movement - now < CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN) {
+        LOG_DBG("Discarded twist (reason = steady_cooldown)");
         data->debounce_start = now;
         data->last_twist = now;
         return 0;
