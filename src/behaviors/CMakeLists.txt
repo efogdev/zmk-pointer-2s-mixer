@@ -2,6 +2,4 @@
 # SPDX-License-Identifier: MIT
 
 target_sources_ifdef(CONFIG_ZMK_POINTER_2S_MIXER app PRIVATE behavior_p2sm_sens.c)
-target_sources_ifdef(CONFIG_ZMK_POINTER_2S_MIXER app PRIVATE behavior_p2sm_accel_toggle.c)
-target_sources_ifdef(CONFIG_ZMK_POINTER_2S_MIXER app PRIVATE behavior_p2sm_accel_adj.c)
 target_sources_ifdef(CONFIG_ZMK_POINTER_2S_MIXER app PRIVATE behavior_p2sm_twist_toggle.c)

@@ -2,7 +2,6 @@
 #include <zephyr/dt-bindings/dt-util.h>
 
 #define P2SM_SETTINGS_PREFIX "p2sm_sens"
-#define P2SM_ACCEL_SETTINGS_PREFIX "p2sm_accel"
 
 #define INPUT_MIXER_SENSOR1 BIT(0)
 #define INPUT_MIXER_SENSOR2 BIT(1)

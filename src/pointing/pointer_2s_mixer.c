@@ -30,6 +30,7 @@ static void twist_feedback_cooldown_work_cb(struct k_work *work);
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
+static float g_from_settings[2] = { -1, -1 };
 struct k_work_delayable p2sm_save_work;
 static void p2sm_save_work_cb(struct k_work *work);
 #endif
@@ -90,11 +91,6 @@ struct zip_pointer_2s_mixer_data {
 
     float ema_delta_y, ema_translation;
     bool ema_initialized;
-
-    bool twist_accel_enabled;
-    float twist_accel_value;
-    uint32_t last_twist_time;
-    float last_twist_magnitude;
 
     uint32_t last_significant_movement;
 
@@ -525,20 +521,6 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
     if (data->twist_enabled && now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
         float twist_float = calculate_twist(dev) * data->twist_coef;
-        
-        if (data->twist_accel_enabled && twist_float != 0 && data->twist_accel_value - 1.0f > 1e-4f) {
-            const float current_magnitude = fabsf(twist_float);
-            const uint32_t time_delta = now - data->last_twist_time;
-            if (time_delta > 0 && time_delta < 1000) {
-                const float velocity = current_magnitude / (time_delta / 1000.0f);
-                const float accel_factor = 1.0f + (velocity / 1000.0f) * (data->twist_accel_value - 1.0f);
-                twist_float *= accel_factor;
-            }
-            
-            data->last_twist_time = now;
-            data->last_twist_magnitude = current_magnitude;
-        }
-        
         if (now - data->last_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
             data->rpt_twist_remainder = twist_float;
         } else {
@@ -681,10 +663,6 @@ static int data_init(const struct device *dev) {
     data->ema_initialized = false;
 
     data->twist_enabled = true;
-    data->twist_accel_enabled = false;
-    data->twist_accel_value = 1.0f;
-    data->last_twist_time = 0;
-    data->last_twist_magnitude = 0.0f;
 
     // going >1 means losing precision
     // acceptable for scroll but not movement
@@ -811,19 +789,13 @@ static void p2sm_save_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     const float values[2] = { data->move_coef, data->twist_coef };
 
-    int err = settings_save_one(P2SM_SETTINGS_PREFIX, values, sizeof(values));
+    char key[24];
+    sprintf(key, "%s/global", P2SM_SETTINGS_PREFIX);
+    const int err = settings_save_one(key, values, sizeof(values));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     } else {
         LOG_DBG("Sensitivity settings saved");
-    }
-
-    const float accel[2] = { data->twist_accel_enabled ? 1.0f : 0.0f, data->twist_accel_value };
-    err = settings_save_one(P2SM_ACCEL_SETTINGS_PREFIX, accel, sizeof(accel));
-    if (err < 0) {
-        LOG_ERR("Failed to save settings %d", err);
-    } else {
-        LOG_DBG("Acceleration settings saved");
     }
 }
 
@@ -880,54 +852,6 @@ void p2sm_set_twist_coef(const float coef) {
 #endif
 }
 
-bool p2sm_get_twist_accel_enabled() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return false;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->twist_accel_enabled;
-}
-
-void p2sm_set_twist_accel_enabled(const bool enabled) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    data->twist_accel_enabled = enabled;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
-}
-
-float p2sm_get_twist_accel_value() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return 0;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->twist_accel_value;
-}
-
-void p2sm_set_twist_accel_value(const float value) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    data->twist_accel_value = value;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
-}
-
 bool p2sm_twist_enabled() {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     return data->twist_enabled;
@@ -942,6 +866,26 @@ void p2sm_toggle_twist() {
     struct zip_pointer_2s_mixer_data *data = g_dev->data;
     data->twist_enabled = !data->twist_enabled;
 }
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+// ReSharper disable once CppParameterMayBeConst
+static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
+    if (!settings_name_steq(name, "global", NULL)) {
+        return 0;
+    }
+
+    const int err = read_cb(cb_arg, g_from_settings, sizeof(g_from_settings));
+    if (err < 0) {
+        LOG_ERR("Failed to load settings (err = %d)", err);
+    }
+
+    p2sm_set_move_coef(g_from_settings[0]);
+    p2sm_set_twist_coef(g_from_settings[1]);
+    return err;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(sensor_attr_cycle, P2SM_SETTINGS_PREFIX, NULL, p2sm_settings_load_cb, NULL, NULL);
+#endif
 
 static struct zip_pointer_2s_mixer_data data = {};
 static struct zip_pointer_2s_mixer_config config = {

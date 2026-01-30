@@ -8,10 +8,20 @@ float p2sm_get_twist_coef();
 void p2sm_set_move_coef(float coef);
 void p2sm_set_twist_coef(float coef);
 
-bool p2sm_get_twist_accel_enabled();
-void p2sm_set_twist_accel_enabled(bool enabled);
-float p2sm_get_twist_accel_value();
-void p2sm_set_twist_accel_value(float value);
-
 bool p2sm_twist_enabled();
 void p2sm_toggle_twist();
+
+struct p2sm_sens_behavior_config {
+    uint16_t step;
+    uint16_t min_step, max_step;
+    uint8_t max_multiplier;
+    bool wrap, feedback_on_limit;
+    uint16_t feedback_duration;
+    uint8_t feedback_wrap_pattern_len;
+    int feedback_wrap_pattern[CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_ARR_VALUES];
+};
+
+uint8_t p2sm_sens_num_behaviors();
+struct p2sm_sens_behavior_config p2sm_sens_behavior_get_config(uint8_t id);
+int p2sm_sens_behavior_set_config(uint8_t id, struct p2sm_sens_behavior_config config);
+void p2sm_sens_behaviors_save_all();
