@@ -8,7 +8,3 @@
 
 #define P2SM_INC BIT(0)
 #define P2SM_DEC BIT(1)
-
-#define P2SM_ACCEL_DIS 0
-#define P2SM_ACCEL_EN 1
-#define P2SM_ACCEL_TOGGLE 2

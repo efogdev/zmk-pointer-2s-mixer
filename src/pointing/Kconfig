@@ -109,4 +109,12 @@ config POINTER_2S_MIXER_STEADY_COOLDOWN
   int "Twist after movement, msec"
   default 100
 
+config POINTER_2S_MIXER_DEFAULT_MOVE_COEF
+  int "Default pointer sensitivity in %"
+  default 20
+
+config POINTER_2S_MIXER_DEFAULT_TWIST_COEF
+  int "Default twist scroll sensitivity in %"
+  default 5
+
 endif # ZMK_POINTER_2S_MIXER

@@ -66,7 +66,7 @@ struct zip_pointer_2s_mixer_data {
     const struct device *dev;
     struct k_work_delayable twist_filter_cleanup_work, twist_history_cleanup_work;
 
-    bool initialized, twist_enabled;
+    bool initialized, twist_enabled, twist_reversed;
     uint32_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
     float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
@@ -520,7 +520,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     }
 
     if (data->twist_enabled && now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
-        float twist_float = calculate_twist(dev) * data->twist_coef;
+        const float twist_float = calculate_twist(dev) * data->twist_coef;
         if (now - data->last_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
             data->rpt_twist_remainder = twist_float;
         } else {
@@ -531,7 +531,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         if (twist_int != 0) {
             data->last_rpt_time_twist = now;
             data->rpt_twist_remainder -= twist_int;
-            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, twist_int, true, K_NO_WAIT);
+            input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, data->twist_reversed ? -twist_int : twist_int, true, K_NO_WAIT);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
             data->twist_accumulator += abs(twist_int);
@@ -646,8 +646,8 @@ static int data_init(const struct device *dev) {
     calculate_rotation_matrix(surface_p2[0], surface_p2[1], surface_p2[2], 0, 0, -radius, data->rotation_matrix2);
 
     data->last_twist_direction = -1;
-    data->move_coef = 1.0f;
-    data->twist_coef = 1.0f;
+    data->move_coef = (float) CONFIG_POINTER_2S_MIXER_DEFAULT_MOVE_COEF / 100;
+    data->twist_coef = (float) CONFIG_POINTER_2S_MIXER_DEFAULT_TWIST_COEF / 100;
 
     if (config->sync_scroll_report_ms != 0) {
         data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 1;
@@ -716,7 +716,6 @@ static int data_init(const struct device *dev) {
     data->initialized = true;
 
     p2sm_sens_driver_init();
-    p2sm_accel_driver_init();
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     k_work_init_delayable(&p2sm_save_work, p2sm_save_work_cb);
@@ -791,11 +790,17 @@ static void p2sm_save_work_cb(struct k_work *work) {
 
     char key[24];
     sprintf(key, "%s/global", P2SM_SETTINGS_PREFIX);
-    const int err = settings_save_one(key, values, sizeof(values));
+    int err = settings_save_one(key, values, sizeof(values));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     } else {
         LOG_DBG("Sensitivity settings saved");
+    }
+
+    sprintf(key, "%s/twist_reversed", P2SM_SETTINGS_PREFIX);
+    err = settings_save_one(key, &data->twist_reversed, sizeof(data->twist_reversed));
+    if (err < 0) {
+        LOG_ERR("Failed to save settings %d", err);
     }
 }
 
@@ -857,6 +862,35 @@ bool p2sm_twist_enabled() {
     return data->twist_enabled;
 }
 
+bool p2sm_twist_is_reversed() {
+    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    return data->twist_reversed;
+}
+
+void p2sm_toggle_twist_reverse() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->twist_reversed = !data->twist_reversed;
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    p2sm_save_config();
+#endif
+}
+
+static void p2sm_toggle_twist_set_reversed(const bool reversed) {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->twist_reversed = reversed;
+}
+
 void p2sm_toggle_twist() {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");
@@ -870,8 +904,19 @@ void p2sm_toggle_twist() {
 #if IS_ENABLED(CONFIG_SETTINGS)
 // ReSharper disable once CppParameterMayBeConst
 static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
+    if (settings_name_steq(name, "twist_reversed", NULL)) {
+        bool reverse = false;
+        const int err = read_cb(cb_arg, &reverse, sizeof(reverse));
+        p2sm_toggle_twist_set_reversed(reverse);
+        return err;
+    }
+
     if (!settings_name_steq(name, "global", NULL)) {
-        return 0;
+        if (settings_name_steq(name, "", NULL)) {
+            LOG_WRN("Loading old values for backward compatibility");
+        } else {
+            return 0;
+        }
     }
 
     const int err = read_cb(cb_arg, g_from_settings, sizeof(g_from_settings));

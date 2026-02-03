@@ -19,11 +19,17 @@ static bool initialized = false;
 static uint8_t g_dev_num = 0;
 static const char* g_devices[CONFIG_POINTER_2S_MIXER_SENS_MAX_DEVICES] = { NULL };
 
+#if IS_ENABLED(CONFIG_SETTINGS)
+struct k_work_delayable p2sm_sens_save_work;
+static void p2sm_sens_save_work_cb(struct k_work *work);
+#endif
+
 struct behavior_p2sm_sens_config {
     const bool scroll;
     const struct gpio_dt_spec feedback_gpios;
     const struct gpio_dt_spec feedback_extra_gpios;
     struct p2sm_sens_behavior_config values;
+    char* display_name;
 };
 
 struct behavior_p2sm_sens_data {
@@ -114,8 +120,8 @@ static int p2sm_detect_drift(const char* dev_name, const float min) {
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SENS_LOG_EN)
     log_sensitivity("  > Now: ", current, true);
     LOG_DBG("  > Current step: %d", steps_count + 1);
-    LOG_DBG("  > Step size: %d/%d", cfg->step, cfg->max_multiplier * 1000);
-    LOG_DBG("  > Drift: %d", cfg->step - d_drift);
+    LOG_DBG("  > Step size: %d/%d", cfg->values.step, cfg->values.max_multiplier * 1000);
+    LOG_DBG("  > Drift: %d", cfg->values.step - d_drift);
 #endif
 
     if (cfg->values.step - d_drift > CONFIG_POINTER_2S_MIXER_SENS_DRIFT_CORRECTION) {
@@ -317,6 +323,20 @@ static void feedback_pattern_work_cb(struct k_work *work) {
     k_work_reschedule(&data->feedback_pattern_work, K_MSEC(pattern_duration));
 }
 
+#if IS_ENABLED(CONFIG_SETTINGS)
+void p2sm_sens_load_and_apply_behaviors_config() {
+    LOG_INF("Loading behaviors config from settings…");
+    
+    const int err = settings_load_subtree(P2SM_SETTINGS_PREFIX"/beh");
+    if (err < 0) {
+        LOG_ERR("Failed to load behaviors settings: %d", err);
+        return;
+    }
+    
+    LOG_INF("Behaviors config loaded and applied");
+}
+#endif
+
 void p2sm_sens_driver_init() {
     if (initialized) {
         LOG_ERR("Sensitivity driver already initialized!");
@@ -324,11 +344,17 @@ void p2sm_sens_driver_init() {
     }
 
     LOG_INF("Initializing sensitivity cycling driver…");
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    k_work_init_delayable(&p2sm_sens_save_work, p2sm_sens_save_work_cb);
+    p2sm_sens_load_and_apply_behaviors_config();
+#else
     for (int i = 0; i < CONFIG_POINTER_2S_MIXER_SENS_MAX_DEVICES; i++) {
         if (g_devices[i] != NULL) {
             p2sm_detect_drift(g_devices[i], find_min_value(g_devices[i]));
         }
     }
+#endif
 
     initialized = true;
 }
@@ -389,10 +415,11 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
 
 #define P2SM_INST(n)                                                                                  \
     static struct behavior_p2sm_sens_data behavior_p2sm_sens_data_##n = {};                           \
-    static const struct behavior_p2sm_sens_config behavior_p2sm_sens_config_##n = {                   \
+    static struct behavior_p2sm_sens_config behavior_p2sm_sens_config_##n = {                         \
         .scroll = DT_INST_PROP_OR(n, scroll, false),                                                  \
         .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_gpios, { .port = NULL }),              \
         .feedback_extra_gpios = GPIO_DT_SPEC_INST_GET_OR(n, feedback_extra_gpios, { .port = NULL }),  \
+        .display_name = DT_INST_PROP_OR(n, display_name, DEVICE_DT_NAME(n)),                          \
         .values = {                                                                                   \
             .step = DT_INST_PROP(n, step),                                                            \
             .wrap = DT_INST_PROP_OR(n, wrap, true),                                                   \
@@ -403,11 +430,113 @@ static const struct behavior_driver_api behavior_p2sm_sens_driver_api = {
             .feedback_duration = DT_INST_PROP_OR(n, feedback_duration, 0),                            \
             .feedback_wrap_pattern_len = DT_INST_PROP_LEN_OR(n, feedback_wrap_pattern, 0),            \
             .feedback_wrap_pattern = DT_INST_PROP_OR(n, feedback_wrap_pattern, { 0 }),                \
+            .scroll = DT_INST_PROP_OR(n, scroll, false),                                              \
+            .display_name = DT_INST_PROP_OR(n, display_name, DEVICE_DT_NAME(n)),                      \
         },                                                                                            \
     };                                                                                                \
     BEHAVIOR_DT_INST_DEFINE(n, behavior_p2sm_sens_init, NULL, &behavior_p2sm_sens_data_##n,           \
         &behavior_p2sm_sens_config_##n, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &behavior_p2sm_sens_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(P2SM_INST)
+
+uint8_t p2sm_sens_num_behaviors() {
+    return g_dev_num;
+}
+
+struct p2sm_sens_behavior_config p2sm_sens_behavior_get_config(const uint8_t id) {
+    if (id >= g_dev_num || g_devices[id] == NULL) {
+        LOG_ERR("Invalid behavior id: %d", id);
+        return (struct p2sm_sens_behavior_config){0};
+    }
+    
+    const struct device *dev = zmk_behavior_get_binding(g_devices[id]);
+    if (dev == NULL) {
+        LOG_ERR("Device not found for id: %d", id);
+        return (struct p2sm_sens_behavior_config){0};
+    }
+    
+    const struct behavior_p2sm_sens_config *cfg = dev->config;
+    return cfg->values;
+}
+
+int p2sm_sens_behavior_set_config(const uint8_t id, const struct p2sm_sens_behavior_config config) {
+    if (id >= g_dev_num || g_devices[id] == NULL) {
+        LOG_ERR("Invalid behavior id: %d", id);
+        return -1;
+    }
+
+    const struct device *dev = zmk_behavior_get_binding(g_devices[id]);
+    if (dev == NULL) {
+        LOG_ERR("Device not found for id: %d", id);
+        return -1;
+    }
+
+    struct behavior_p2sm_sens_config *cfg = (struct behavior_p2sm_sens_config *) dev->config;
+    cfg->values = config;
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    p2sm_sens_behaviors_save_all();
+#endif
+    
+    return 0;
+}
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+static void p2sm_sens_save_work_cb(struct k_work *work) {
+    for (uint8_t i = 0; i < g_dev_num; i++) {
+        if (g_devices[i] == NULL) continue;
+        
+        const struct device *dev = zmk_behavior_get_binding(g_devices[i]);
+        if (dev == NULL) continue;
+        
+        const struct behavior_p2sm_sens_config *cfg = dev->config;
+        
+        char key[32];
+        sprintf(key, "%s/beh/%d", P2SM_SETTINGS_PREFIX, i);
+        const int err = settings_save_one(key, &cfg->values, sizeof(struct p2sm_sens_behavior_config));
+        if (err < 0) {
+            LOG_ERR("Failed to save behavior %d settings: %d", i, err);
+        } else {
+            LOG_INF("Behavior %d settings saved", i);
+        }
+    }
+}
+
+void p2sm_sens_behaviors_save_all() {
+    k_work_reschedule(&p2sm_sens_save_work, K_MSEC(CONFIG_POINTER_2S_MIXER_SETTINGS_SAVE_DELAY));
+}
+
+// ReSharper disable once CppParameterMayBeConst
+static int p2sm_sens_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
+    const uint8_t id = (uint8_t)atoi(name);
+    if (id >= g_dev_num || g_devices[id] == NULL) {
+        LOG_WRN("Invalid behavior id in settings: %d", id);
+        return 0;
+    }
+    
+    const struct device *dev = zmk_behavior_get_binding(g_devices[id]);
+    if (dev == NULL) {
+        LOG_ERR("Device not found for id: %d", id);
+        return 0;
+    }
+    
+    struct p2sm_sens_behavior_config loaded_config;
+    const int err = read_cb(cb_arg, &loaded_config, sizeof(struct p2sm_sens_behavior_config));
+    if (err < 0) {
+        LOG_ERR("Failed to load behavior %d settings (err = %d)", id, err);
+        return err;
+    }
+    
+    struct behavior_p2sm_sens_config *cfg = (struct behavior_p2sm_sens_config *)dev->config;
+    cfg->values = loaded_config;
+    cfg->values.scroll = cfg->scroll;
+    cfg->values.display_name = cfg->display_name;
+    
+    LOG_INF("Loaded settings for behavior %d (%s)", id, g_devices[id]);
+    return 0;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(p2sm_sens_behaviors, P2SM_SETTINGS_PREFIX"/beh", NULL, p2sm_sens_settings_load_cb, NULL, NULL);
+#endif
 
 #endif /* DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT) */
