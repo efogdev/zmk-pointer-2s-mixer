@@ -912,11 +912,7 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
     }
 
     if (!settings_name_steq(name, "global", NULL)) {
-        if (settings_name_steq(name, "", NULL)) {
-            LOG_WRN("Loading old values for backward compatibility");
-        } else {
-            return 0;
-        }
+        return 0;
     }
 
     const int err = read_cb(cb_arg, g_from_settings, sizeof(g_from_settings));
