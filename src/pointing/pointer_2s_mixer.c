@@ -788,7 +788,7 @@ static void p2sm_save_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     const float values[2] = { data->move_coef, data->twist_coef };
 
-    char key[24];
+    char key[36];
     sprintf(key, "%s/global", P2SM_SETTINGS_PREFIX);
     int err = settings_save_one(key, values, sizeof(values));
     if (err < 0) {
@@ -858,11 +858,21 @@ void p2sm_set_twist_coef(const float coef) {
 }
 
 bool p2sm_twist_enabled() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return false;
+    }
+
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     return data->twist_enabled;
 }
 
 bool p2sm_twist_is_reversed() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return false;
+    }
+
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     return data->twist_reversed;
 }
@@ -907,7 +917,10 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
     if (settings_name_steq(name, "twist_reversed", NULL)) {
         bool reverse = false;
         const int err = read_cb(cb_arg, &reverse, sizeof(reverse));
-        p2sm_toggle_twist_set_reversed(reverse);
+        if (err == 0) {
+            p2sm_toggle_twist_set_reversed(reverse);
+        }
+
         return err;
     }
 
@@ -918,10 +931,11 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
     const int err = read_cb(cb_arg, g_from_settings, sizeof(g_from_settings));
     if (err < 0) {
         LOG_ERR("Failed to load settings (err = %d)", err);
+    } else {
+        p2sm_set_move_coef(g_from_settings[0]);
+        p2sm_set_twist_coef(g_from_settings[1]);
     }
-
-    p2sm_set_move_coef(g_from_settings[0]);
-    p2sm_set_twist_coef(g_from_settings[1]);
+    
     return err;
 }
 
