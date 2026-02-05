@@ -916,12 +916,14 @@ void p2sm_toggle_twist() {
 static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
     if (settings_name_steq(name, "twist_reversed", NULL)) {
         bool reverse = false;
-        const int err = read_cb(cb_arg, &reverse, sizeof(reverse));
-        if (err == 0) {
+        const int rd = read_cb(cb_arg, &reverse, sizeof(reverse));
+        if (rd == sizeof(bool)) {
             p2sm_toggle_twist_set_reversed(reverse);
+        } else {
+            LOG_ERR("Failed to load twist reversed");
         }
 
-        return err;
+        return 0;
     }
 
     if (!settings_name_steq(name, "global", NULL)) {
@@ -932,14 +934,20 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
     if (err < 0) {
         LOG_ERR("Failed to load settings (err = %d)", err);
     } else {
-        p2sm_set_move_coef(g_from_settings[0]);
-        p2sm_set_twist_coef(g_from_settings[1]);
+        if (g_dev == NULL) {
+            LOG_ERR("Device not initialized!");
+            return -EBUSY;
+        }
+
+        struct zip_pointer_2s_mixer_data *data = g_dev->data;
+        data->move_coef = g_from_settings[0];
+        data->twist_coef = g_from_settings[1];
     }
     
     return err;
 }
 
-SETTINGS_STATIC_HANDLER_DEFINE(sensor_attr_cycle, P2SM_SETTINGS_PREFIX, NULL, p2sm_settings_load_cb, NULL, NULL);
+SETTINGS_STATIC_HANDLER_DEFINE(p2sm_settings, P2SM_SETTINGS_PREFIX, NULL, p2sm_settings_load_cb, NULL, NULL);
 #endif
 
 static struct zip_pointer_2s_mixer_data data = {};
@@ -958,4 +966,4 @@ static struct zip_pointer_2s_mixer_config config = {
     .twist_feedback_threshold = DT_INST_PROP_OR(0, twist_feedback_threshold, 0),
     .twist_feedback_delay = DT_INST_PROP_OR(0, twist_feedback_delay, 0),
 };
-DEVICE_DT_INST_DEFINE(0, &sy_init, NULL, &data, &config, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &sy_driver_api);
+DEVICE_DT_INST_DEFINE(0, &sy_init, NULL, &data, &config, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &sy_driver_api);
