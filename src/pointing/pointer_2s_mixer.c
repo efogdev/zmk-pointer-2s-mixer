@@ -81,11 +81,9 @@ struct zip_pointer_2s_mixer_data {
 
     float ema_delta_y, ema_translation;
     bool ema_initialized;
-
-    uint32_t last_significant_movement;
-
     bool sma_enabled;
 
+    uint32_t last_sig_move;
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
@@ -103,11 +101,11 @@ struct zip_pointer_2s_mixer_data {
 #endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    float sma_buffer[2][CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX];
-    uint8_t sma_head_index[2];
-    uint8_t sma_count[2];
+    float sma_buffer[CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX][2];
+    uint8_t sma_head_index;
+    uint8_t sma_count;
     uint8_t sma_window_size;
-    uint32_t last_sma_time[2];
+    uint32_t last_sma_time;
 #endif
 };
 
@@ -116,39 +114,35 @@ static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x,
 static void apply_coef(float coef, float *x, float *y);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-static void apply_sma(struct zip_pointer_2s_mixer_data *data, float *value, uint8_t axis) {
-    if (data == NULL || value == NULL || axis >= 2) {
+static void apply_sma(struct zip_pointer_2s_mixer_data *data, float *x, float *y) {
+    if (data == NULL || x == NULL || y == NULL || data->sma_window_size < 2) {
         return;
     }
 
     const uint32_t now = (uint32_t) k_uptime_get();
-    if (data->sma_count[axis] > 0 && now - data->last_sma_time[axis] > CONFIG_POINTER_2S_MIXER_SMA_TIMEOUT) {
-        data->sma_head_index[axis] = 0;
-        data->sma_count[axis] = 0;
-        LOG_DBG("SMA %c history discarded (timeout)", axis == 0 ? 'X' : 'Y');
-    }
-    data->last_sma_time[axis] = now;
-
-    const uint8_t window_size = data->sma_window_size > 0 ? data->sma_window_size : 1;
-    data->sma_buffer[axis][data->sma_head_index[axis]] = *value;
-    data->sma_head_index[axis] = (data->sma_head_index[axis] + 1) % window_size;
-    if (data->sma_count[axis] < window_size) {
-        data->sma_count[axis]++;
+    if (data->sma_count > 0 && now - data->last_sma_time > CONFIG_POINTER_2S_MIXER_SMA_TIMEOUT) {
+        data->sma_head_index = 0;
+        data->sma_count = 0;
+        LOG_DBG("SMA history discarded (timeout)");
     }
 
-    if (data->sma_count[axis] > 0) {
-        float sum = 0.0f;
-        uint8_t cnt = 0;
-        for (uint8_t i = 0; i < data->sma_count[axis]; i++) {
-            float val = data->sma_buffer[axis][i];
-            if (val > 1e-5) {
-                sum += val;
-                cnt++;
-            }
+    data->last_sma_time = now;
+    data->sma_buffer[data->sma_head_index][0] = *x;
+    data->sma_buffer[data->sma_head_index][1] = *y;
+    data->sma_head_index = (data->sma_head_index + 1) % data->sma_window_size;
+    if (data->sma_count < data->sma_window_size) {
+        data->sma_count++;
+    }
+
+    if (data->sma_count == data->sma_window_size) {
+        float sum_x = 0.0f, sum_y = 0.0f;
+        for (uint8_t i = 0; i < data->sma_count; i++) {
+            sum_x += data->sma_buffer[i][0];
+            sum_y += data->sma_buffer[i][1];
         }
-        if (cnt == data->sma_window_size) {
-            *value = sum / cnt;
-        }
+
+        *x = sum_x / (float) data->sma_window_size;
+        *y = sum_y / (float) data->sma_window_size;
     }
 }
 #endif
@@ -211,15 +205,10 @@ static int process_and_report(const struct device *dev) {
     data->rpt_y = (int16_t) data->rpt_y_remainder;
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    if (data->sma_enabled) {
-        if (data->rpt_x) {
-            apply_sma(data, &data->rpt_x_remainder, 0);
-            data->rpt_x = (int16_t) data->rpt_x_remainder;
-        }
-        if (data->rpt_y) {
-            apply_sma(data, &data->rpt_y_remainder, 1);
-            data->rpt_y = (int16_t) data->rpt_y_remainder;
-        }
+    if (data->sma_enabled && (data->rpt_x || data->rpt_y)) {
+        apply_sma(data, &data->rpt_x_remainder, &data->rpt_y_remainder);
+        data->rpt_x = (int16_t) data->rpt_x_remainder;
+        data->rpt_y = (int16_t) data->rpt_y_remainder;
     }
 #endif
 
@@ -230,7 +219,7 @@ static int process_and_report(const struct device *dev) {
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
         if (abs(data->rpt_x) > CONFIG_POINTER_2S_MIXER_STEADY_THRES || abs(data->rpt_y) > CONFIG_POINTER_2S_MIXER_STEADY_THRES) {
-            data->last_significant_movement = now;
+            data->last_sig_move = now;
         }
 
         if (have_x) {
@@ -385,7 +374,7 @@ static float calculate_twist(const struct device *dev) {
         return 0;
     }
 
-    if (data->last_significant_movement - now < CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN) {
+    if (data->last_sig_move - now < CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN) {
         LOG_DBG("Discarded twist (reason = steady_cooldown)");
         data->debounce_start = now;
         data->last_twist = now;
@@ -676,10 +665,8 @@ static int data_init(const struct device *dev) {
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
     memset(data->sma_buffer, 0, sizeof(data->sma_buffer));
-    data->sma_head_index[0] = 0;
-    data->sma_head_index[1] = 0;
-    data->sma_count[0] = 0;
-    data->sma_count[1] = 0;
+    data->sma_head_index = 0;
+    data->sma_count = 0;
     LOG_DBG("SMA buffers initialized: %d entries", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE);
 #endif
 
@@ -896,7 +883,7 @@ bool p2sm_sma_enabled() {
     return data->sma_enabled;
 }
 
-void p2sm_set_sma_enabled(bool enabled) {
+void p2sm_set_sma_enabled(const bool enabled) {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");
         return;
@@ -920,7 +907,7 @@ uint8_t p2sm_get_sma_window() {
     return data->sma_window_size;
 }
 
-void p2sm_set_sma_window(uint8_t window_size) {
+void p2sm_set_sma_window(const uint8_t window_size) {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");
         return;
@@ -928,10 +915,8 @@ void p2sm_set_sma_window(uint8_t window_size) {
 
     struct zip_pointer_2s_mixer_data *data = g_dev->data;
     data->sma_window_size = window_size;
-    data->sma_head_index[0] = 0;
-    data->sma_head_index[1] = 0;
-    data->sma_count[0] = 0;
-    data->sma_count[1] = 0;
+    data->sma_head_index = 0;
+    data->sma_count = 0;
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     p2sm_save_config();
