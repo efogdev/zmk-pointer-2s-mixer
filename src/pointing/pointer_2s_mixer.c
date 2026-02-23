@@ -675,7 +675,7 @@ static int data_init(const struct device *dev) {
         LOG_ERR("Failed to allocate history buffer");
     } else {
         memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-        LOG_INF("Circular history buffer allocated: %d entries", data->max_history_entries);
+        LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
     }
 
     LOG_DBG("Sensor mixer driver initialized");
