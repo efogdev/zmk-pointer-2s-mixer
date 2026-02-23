@@ -56,26 +56,16 @@ struct p2sm_dataframe {
     int16_t s1_x, s1_y, s2_x, s2_y;
 };
 
-// ToDo get rid of it completely?
-struct dataframe_history_entry {
-    uint32_t timestamp;
-};
-
 // origin = ball center
 struct zip_pointer_2s_mixer_data {
     const struct device *dev;
-    struct k_work_delayable twist_filter_cleanup_work, twist_history_cleanup_work;
+    struct k_work_delayable twist_filter_cleanup_work;
 
     bool initialized, twist_enabled, twist_reversed;
     uint32_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
     float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
     float move_coef, twist_coef;
-
-    struct dataframe_history_entry *history_buffer;
-    uint8_t max_history_entries;
-    uint8_t history_head_index;
-    uint8_t history_count;
 
     // accumulates NON-transformed X, Y movements
     struct p2sm_dataframe values;
@@ -113,42 +103,52 @@ struct zip_pointer_2s_mixer_data {
 #endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    int16_t *sma_buffer_x;
-    int16_t *sma_buffer_y;
-    uint8_t sma_head_index;
-    uint8_t sma_count;
-    uint8_t sma_window_size; 
+    float sma_buffer[2][CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX];
+    uint8_t sma_head_index[2];
+    uint8_t sma_count[2];
+    uint8_t sma_window_size;
+    uint32_t last_sma_time[2];
 #endif
 };
 
 static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
-static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe);
-static bool dataframe_history_cleanup(const struct device *dev, uint32_t cutoff_time);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-static void apply_sma(struct zip_pointer_2s_mixer_data *data, int16_t *x, int16_t *y) {
-    if (data->sma_buffer_x == NULL || data->sma_buffer_y == NULL) {
+static void apply_sma(struct zip_pointer_2s_mixer_data *data, float *value, uint8_t axis) {
+    if (data == NULL || value == NULL || axis >= 2) {
         return;
     }
 
+    const uint32_t now = (uint32_t) k_uptime_get();
+    if (data->sma_count[axis] > 0 && now - data->last_sma_time[axis] > CONFIG_POINTER_2S_MIXER_SMA_TIMEOUT) {
+        data->sma_head_index[axis] = 0;
+        data->sma_count[axis] = 0;
+        LOG_DBG("SMA %c history discarded (timeout)", axis == 0 ? 'X' : 'Y');
+    }
+    data->last_sma_time[axis] = now;
+
     const uint8_t window_size = data->sma_window_size > 0 ? data->sma_window_size : 1;
-    data->sma_buffer_x[data->sma_head_index] = *x;
-    data->sma_buffer_y[data->sma_head_index] = *y;
-    data->sma_head_index = (data->sma_head_index + 1) % window_size;
-    if (data->sma_count < window_size) {
-        data->sma_count++;
+    data->sma_buffer[axis][data->sma_head_index[axis]] = *value;
+    data->sma_head_index[axis] = (data->sma_head_index[axis] + 1) % window_size;
+    if (data->sma_count[axis] < window_size) {
+        data->sma_count[axis]++;
     }
 
-    if (data->sma_count > 0) {
-        int32_t sum_x = 0, sum_y = 0;
-        for (uint8_t i = 0; i < data->sma_count; i++) {
-            sum_x += data->sma_buffer_x[i];
-            sum_y += data->sma_buffer_y[i];
+    if (data->sma_count[axis] > 0) {
+        float sum = 0.0f;
+        uint8_t cnt = 0;
+        for (uint8_t i = 0; i < data->sma_count[axis]; i++) {
+            float val = data->sma_buffer[axis][i];
+            if (val > 1e-5) {
+                sum += val;
+                cnt++;
+            }
         }
-        *x = (int16_t)(sum_x / data->sma_count);
-        *y = (int16_t)(sum_y / data->sma_count);
+        if (cnt == data->sma_window_size) {
+            *value = sum / cnt;
+        }
     }
 }
 #endif
@@ -196,25 +196,35 @@ static int process_and_report(const struct device *dev) {
         data->values.s2_y = 0;
     }
 
-    data->rpt_x = (int16_t) data->rpt_x_remainder;
-    data->rpt_y = (int16_t) data->rpt_y_remainder;
-    data->rpt_x_remainder -= data->rpt_x;
-    data->rpt_y_remainder -= data->rpt_y;
-
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    if (data->sma_enabled && (data->rpt_x != 0 || data->rpt_y != 0)) {
-        apply_sma(data, &data->rpt_x, &data->rpt_y);
-    }
-#endif
-
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER)
     if (now - data->last_rpt_time_twist < CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION) {
         data->last_rpt_time = now;
+        data->rpt_x_remainder = 0;
+        data->rpt_y_remainder = 0;
         data->rpt_x = 0;
         data->rpt_y = 0;
         return 0;
     }
 #endif
+
+    data->rpt_x = (int16_t) data->rpt_x_remainder;
+    data->rpt_y = (int16_t) data->rpt_y_remainder;
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    if (data->sma_enabled) {
+        if (data->rpt_x) {
+            apply_sma(data, &data->rpt_x_remainder, 0);
+            data->rpt_x = (int16_t) data->rpt_x_remainder;
+        }
+        if (data->rpt_y) {
+            apply_sma(data, &data->rpt_y_remainder, 1);
+            data->rpt_y = (int16_t) data->rpt_y_remainder;
+        }
+    }
+#endif
+
+    data->rpt_x_remainder -= data->rpt_x;
+    data->rpt_y_remainder -= data->rpt_y;
 
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
@@ -288,60 +298,6 @@ static void apply_coef(const float coef, float *x, float *y) {
     *y *= coef;
 }
 
-static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe) {
-    struct zip_pointer_2s_mixer_data *data = dev->data;
-    const uint32_t now = (uint32_t) k_uptime_get();
-
-    if (data->history_buffer == NULL) {
-        LOG_WRN("History buffer not allocated");
-        data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
-        if (data->history_buffer == NULL) {
-            LOG_ERR("Failed to allocate history buffer");
-        } else {
-            data->history_head_index = 0;
-            data->history_count = 0;
-            memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-            LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
-        }
-
-        return NULL;
-    }
-
-    struct dataframe_history_entry *entry = &data->history_buffer[data->history_head_index];
-    entry->timestamp = (uint32_t) now;
-
-    data->history_head_index = (data->history_head_index + 1) % data->max_history_entries;
-    if (data->history_count < data->max_history_entries) {
-        data->history_count++;
-    }
-
-    return entry;
-}
-
-static bool dataframe_history_cleanup(const struct device *dev, const uint32_t cutoff_time) {
-    const struct zip_pointer_2s_mixer_config *config = dev->config;
-    const struct zip_pointer_2s_mixer_data *data = dev->data;
-
-    if (config->sync_scroll_report_ms == 0) {
-        return true;
-    }
-
-    if (data->history_count == 0) {
-        return false;
-    }
-
-    uint8_t valid_entries = 0;
-    const uint8_t oldest_index = (data->history_head_index - data->history_count + data->max_history_entries) % data->max_history_entries;
-    for (uint8_t i = 0; i < data->history_count; i++) {
-        const uint8_t index = (oldest_index + i) % data->max_history_entries;
-        if (data->history_buffer[index].timestamp >= cutoff_time) {
-            valid_entries++;
-        }
-    }
-
-    return valid_entries >= (config->twist_interference_window / config->sync_scroll_report_ms);
-}
-
 static float calculate_twist(const struct device *dev) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
@@ -375,27 +331,10 @@ static float calculate_twist(const struct device *dev) {
         data->last_twist = now;
         data->debounce_start = now;
         data->ema_initialized = false;
-        data->history_head_index = 0;
-        data->history_count = 0;
-        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
         LOG_DBG("Discarded twist (reason = direction_filter)");
         return 0;
     }
 #endif
-
-    const struct p2sm_dataframe current_dataframe = {s1_x, s1_y, s2_x, s2_y};
-    const struct dataframe_history_entry *history_entry = dataframe_history_add(dev, &current_dataframe);
-    if (history_entry == NULL) {
-        LOG_ERR("Failed to write twist history");
-        return 0;
-    }
-
-    const uint32_t cutoff = now - config->twist_interference_window;
-    const bool enough_entries = dataframe_history_cleanup(dev, cutoff);
-    if (!enough_entries) {
-        LOG_DBG("Discarded movement (reason = history_not_full)");
-        return 0;
-    }
 
     const float delta_y = (float) abs(direction ? s2_y - s1_y : s1_y - s2_y);
     const float translation = abs(s1_x + s2_x) + abs(s1_y + s2_y);
@@ -420,9 +359,6 @@ static float calculate_twist(const struct device *dev) {
     if (avg_translation > translation_allowed) {
         LOG_DBG("Discarded twist (reason = significant_translation)");
         data->ema_initialized = false;
-        data->history_head_index = 0;
-        data->history_count = 0;
-        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
         return 0;
     }
 
@@ -459,7 +395,6 @@ static float calculate_twist(const struct device *dev) {
     data->last_twist = now;
     data->last_twist_direction = direction;
 
-    k_work_reschedule(&data->twist_history_cleanup_work, K_MSEC(config->twist_interference_window));
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN) || IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
 #endif
@@ -483,19 +418,6 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
 #endif
 
     LOG_DBG("Direction filter data discarded (timeout)");
-}
-
-static void twist_history_cleanup_work_cb(struct k_work *work) {
-    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    const struct zip_pointer_2s_mixer_data *dwork_data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_history_cleanup_work);
-    const struct device *dev = dwork_data->dev;
-    struct zip_pointer_2s_mixer_data *data = dev->data;
-
-    data->history_head_index = 0;
-    data->history_count = 0;
-    memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-
-    LOG_DBG("Twist history discarded (timeout)");
 }
 
 static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
@@ -690,21 +612,11 @@ static int data_init(const struct device *dev) {
     data->last_twist_direction = -1;
     data->move_coef = (float) CONFIG_POINTER_2S_MIXER_DEFAULT_MOVE_COEF / 100;
     data->twist_coef = (float) CONFIG_POINTER_2S_MIXER_DEFAULT_TWIST_COEF / 100;
+    data->twist_enabled = true;
 
-    if (config->sync_scroll_report_ms != 0) {
-        data->max_history_entries = (config->twist_interference_window / config->sync_scroll_report_ms) + 1;
-    } else {
-        data->max_history_entries = 1;
-    }
-
-    data->history_head_index = 0;
-    data->history_count = 0;
-    
     data->ema_delta_y = 0.0f;
     data->ema_translation = 0.0f;
     data->ema_initialized = false;
-
-    data->twist_enabled = true;
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
     data->sma_enabled = false;
@@ -715,14 +627,6 @@ static int data_init(const struct device *dev) {
     // acceptable for scroll but not movement
     if (data->move_coef > 1.0f) {
         data->move_coef = 1.0f;
-    }
-
-    data->history_buffer = malloc(data->max_history_entries * sizeof(struct dataframe_history_entry));
-    if (data->history_buffer == NULL) {
-        LOG_ERR("Failed to allocate history buffer");
-    } else {
-        memset(data->history_buffer, 0, data->max_history_entries * sizeof(struct dataframe_history_entry));
-        LOG_DBG("Circular history buffer allocated: %d entries", data->max_history_entries);
     }
 
     LOG_DBG("Sensor mixer driver initialized");
@@ -769,28 +673,14 @@ static int data_init(const struct device *dev) {
 #endif
 
     k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
-    k_work_init_delayable(&data->twist_history_cleanup_work, twist_history_cleanup_work_cb);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    data->sma_buffer_x = malloc(CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
-    data->sma_buffer_y = malloc(CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
-    if (data->sma_buffer_x == NULL || data->sma_buffer_y == NULL) {
-        LOG_ERR("Failed to allocate SMA buffers");
-        if (data->sma_buffer_x) {
-            free(data->sma_buffer_x);
-            data->sma_buffer_x = NULL;
-        }
-        if (data->sma_buffer_y) {
-            free(data->sma_buffer_y);
-            data->sma_buffer_y = NULL;
-        }
-    } else {
-        memset(data->sma_buffer_x, 0, CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
-        memset(data->sma_buffer_y, 0, CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
-        data->sma_head_index = 0;
-        data->sma_count = 0;
-        LOG_DBG("SMA buffers allocated: %d entries", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE);
-    }
+    memset(data->sma_buffer, 0, sizeof(data->sma_buffer));
+    data->sma_head_index[0] = 0;
+    data->sma_head_index[1] = 0;
+    data->sma_count[0] = 0;
+    data->sma_count[1] = 0;
+    LOG_DBG("SMA buffers initialized: %d entries", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE);
 #endif
 
     return 1;
@@ -1038,8 +928,10 @@ void p2sm_set_sma_window(uint8_t window_size) {
 
     struct zip_pointer_2s_mixer_data *data = g_dev->data;
     data->sma_window_size = window_size;
-    data->sma_head_index = 0;
-    data->sma_count = 0;
+    data->sma_head_index[0] = 0;
+    data->sma_head_index[1] = 0;
+    data->sma_count[0] = 0;
+    data->sma_count[1] = 0;
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     p2sm_save_config();

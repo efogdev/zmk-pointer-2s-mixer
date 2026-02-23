@@ -123,9 +123,24 @@ config POINTER_2S_MIXER_SMA_EN
   help
     Apply SMA filtering to pointer movements
 
-config POINTER_2S_MIXER_SMA_WINDOW_SIZE
-  int "SMA window size (number of samples)"
-  default 4
+config POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX
+  int "SMA maximum window size (number of samples)"
+  default 12
+  range 2 255
   depends on POINTER_2S_MIXER_SMA_EN
+  help
+    Maximum SMA window size allowed at runtime
+
+config POINTER_2S_MIXER_SMA_WINDOW_SIZE
+  int "SMA default window size (number of samples)"
+  default 3
+  depends on POINTER_2S_MIXER_SMA_EN
+
+config POINTER_2S_MIXER_SMA_TIMEOUT
+  int "SMA timeout, msec"
+  default 64
+  depends on POINTER_2S_MIXER_SMA_EN
+  help
+    Discard SMA history after no data for this duration
 
 endif # ZMK_POINTER_2S_MIXER
