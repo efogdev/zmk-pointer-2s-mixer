@@ -94,6 +94,8 @@ struct zip_pointer_2s_mixer_data {
 
     uint32_t last_significant_movement;
 
+    bool sma_enabled;
+
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
@@ -109,6 +111,14 @@ struct zip_pointer_2s_mixer_data {
     uint32_t feedback_cooldown_until;
     bool feedback_is_in_cooldown;
 #endif
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    int16_t *sma_buffer_x;
+    int16_t *sma_buffer_y;
+    uint8_t sma_head_index;
+    uint8_t sma_count;
+    uint8_t sma_window_size; 
+#endif
 };
 
 static int data_init(const struct device *dev);
@@ -116,6 +126,32 @@ static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x,
 static void apply_coef(float coef, float *x, float *y);
 static struct dataframe_history_entry* dataframe_history_add(const struct device *dev, const struct p2sm_dataframe *dataframe);
 static bool dataframe_history_cleanup(const struct device *dev, uint32_t cutoff_time);
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+static void apply_sma(struct zip_pointer_2s_mixer_data *data, int16_t *x, int16_t *y) {
+    if (data->sma_buffer_x == NULL || data->sma_buffer_y == NULL) {
+        return;
+    }
+
+    const uint8_t window_size = data->sma_window_size > 0 ? data->sma_window_size : 1;
+    data->sma_buffer_x[data->sma_head_index] = *x;
+    data->sma_buffer_y[data->sma_head_index] = *y;
+    data->sma_head_index = (data->sma_head_index + 1) % window_size;
+    if (data->sma_count < window_size) {
+        data->sma_count++;
+    }
+
+    if (data->sma_count > 0) {
+        int32_t sum_x = 0, sum_y = 0;
+        for (uint8_t i = 0; i < data->sma_count; i++) {
+            sum_x += data->sma_buffer_x[i];
+            sum_y += data->sma_buffer_y[i];
+        }
+        *x = (int16_t)(sum_x / data->sma_count);
+        *y = (int16_t)(sum_y / data->sma_count);
+    }
+}
+#endif
 
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
@@ -164,6 +200,12 @@ static int process_and_report(const struct device *dev) {
     data->rpt_y = (int16_t) data->rpt_y_remainder;
     data->rpt_x_remainder -= data->rpt_x;
     data->rpt_y_remainder -= data->rpt_y;
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    if (data->sma_enabled && (data->rpt_x != 0 || data->rpt_y != 0)) {
+        apply_sma(data, &data->rpt_x, &data->rpt_y);
+    }
+#endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER)
     if (now - data->last_rpt_time_twist < CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION) {
@@ -664,6 +706,11 @@ static int data_init(const struct device *dev) {
 
     data->twist_enabled = true;
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    data->sma_enabled = false;
+    data->sma_window_size = CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE;
+#endif
+
     // going >1 means losing precision
     // acceptable for scroll but not movement
     if (data->move_coef > 1.0f) {
@@ -723,6 +770,29 @@ static int data_init(const struct device *dev) {
 
     k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
     k_work_init_delayable(&data->twist_history_cleanup_work, twist_history_cleanup_work_cb);
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    data->sma_buffer_x = malloc(CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
+    data->sma_buffer_y = malloc(CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
+    if (data->sma_buffer_x == NULL || data->sma_buffer_y == NULL) {
+        LOG_ERR("Failed to allocate SMA buffers");
+        if (data->sma_buffer_x) {
+            free(data->sma_buffer_x);
+            data->sma_buffer_x = NULL;
+        }
+        if (data->sma_buffer_y) {
+            free(data->sma_buffer_y);
+            data->sma_buffer_y = NULL;
+        }
+    } else {
+        memset(data->sma_buffer_x, 0, CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
+        memset(data->sma_buffer_y, 0, CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE * sizeof(int16_t));
+        data->sma_head_index = 0;
+        data->sma_count = 0;
+        LOG_DBG("SMA buffers allocated: %d entries", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE);
+    }
+#endif
+
     return 1;
 }
 
@@ -802,6 +872,20 @@ static void p2sm_save_work_cb(struct k_work *work) {
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     }
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    sprintf(key, "%s/sma_en", P2SM_SETTINGS_PREFIX);
+    err = settings_save_one(key, &data->sma_enabled, sizeof(data->sma_enabled));
+    if (err < 0) {
+        LOG_ERR("Failed to save settings %d", err);
+    }
+
+    sprintf(key, "%s/sma_win", P2SM_SETTINGS_PREFIX);
+    err = settings_save_one(key, &data->sma_window_size, sizeof(data->sma_window_size));
+    if (err < 0) {
+        LOG_ERR("Failed to save settings %d", err);
+    }
+#endif
 }
 
 static void p2sm_save_config() {
@@ -911,6 +995,58 @@ void p2sm_toggle_twist() {
     data->twist_enabled = !data->twist_enabled;
 }
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+bool p2sm_sma_enabled() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return false;
+    }
+
+    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    return data->sma_enabled;
+}
+
+void p2sm_set_sma_enabled(bool enabled) {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->sma_enabled = enabled;
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    p2sm_save_config();
+#endif
+}
+
+uint8_t p2sm_get_sma_window() {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return 0;
+    }
+
+    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    return data->sma_window_size;
+}
+
+void p2sm_set_sma_window(uint8_t window_size) {
+    if (g_dev == NULL) {
+        LOG_ERR("Device not initialized!");
+        return;
+    }
+
+    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    data->sma_window_size = window_size;
+    data->sma_head_index = 0;
+    data->sma_count = 0;
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    p2sm_save_config();
+#endif
+}
+#endif
+
 #if IS_ENABLED(CONFIG_SETTINGS)
 // ReSharper disable once CppParameterMayBeConst
 static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
@@ -925,6 +1061,38 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
 
         return 0;
     }
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    if (settings_name_steq(name, "sma_en", NULL)) {
+        bool sma_en = true;
+        const int rd = read_cb(cb_arg, &sma_en, sizeof(sma_en));
+        if (rd == sizeof(bool)) {
+            if (g_dev != NULL) {
+                struct zip_pointer_2s_mixer_data *data = g_dev->data;
+                data->sma_enabled = sma_en;
+            }
+        } else {
+            LOG_ERR("Failed to load sma_en");
+        }
+
+        return 0;
+    }
+
+    if (settings_name_steq(name, "sma_win", NULL)) {
+        uint8_t sma_win = CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE;
+        const int rd = read_cb(cb_arg, &sma_win, sizeof(sma_win));
+        if (rd == sizeof(uint8_t)) {
+            if (g_dev != NULL) {
+                struct zip_pointer_2s_mixer_data *data = g_dev->data;
+                data->sma_window_size = sma_win;
+            }
+        } else {
+            LOG_ERR("Failed to load sma_win");
+        }
+
+        return 0;
+    }
+#endif
 
     if (!settings_name_steq(name, "global", NULL)) {
         return 0;

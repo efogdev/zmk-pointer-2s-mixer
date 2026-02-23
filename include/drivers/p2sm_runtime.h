@@ -12,6 +12,13 @@ bool p2sm_twist_is_reversed();
 void p2sm_toggle_twist();
 void p2sm_toggle_twist_reverse();
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+bool p2sm_sma_enabled();
+void p2sm_set_sma_enabled(bool enabled);
+uint8_t p2sm_get_sma_window();
+void p2sm_set_sma_window(uint8_t window_size);
+#endif
+
 struct p2sm_sens_behavior_config {
     uint16_t step;
     uint16_t min_step, max_step;

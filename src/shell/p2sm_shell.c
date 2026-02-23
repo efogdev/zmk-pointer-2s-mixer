@@ -98,10 +98,77 @@ static int cmd_twist(const struct shell *sh, const size_t argc, char **argv) {
     return 0;
 }
 
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+static int cmd_sma(const struct shell *sh, const size_t argc, char **argv) {
+    if (argc < 2) {
+        shprint(sh, "Usage: p2sm sma <get|set|on|off|toggle|window>\n");
+        return -EINVAL;
+    }
+
+    if (strcmp(argv[1], "get") == 0) {
+        shprint(sh, "%s", p2sm_sma_enabled() ? "enabled" : "disabled");
+    } else if (strcmp(argv[1], "set") == 0) {
+        if (argc < 3) {
+            shprint(sh, "Usage: p2sm sma set <0|1>\n");
+            return -EINVAL;
+        }
+        
+        char *endptr;
+        const uint8_t val = strtoul(argv[2], &endptr, 10);
+        p2sm_set_sma_enabled(val != 0);
+        shprint(sh, "Set: %s", p2sm_sma_enabled() ? "enabled" : "disabled");
+    } else if (strcmp(argv[1], "on") == 0) {
+        p2sm_set_sma_enabled(true);
+        shprint(sh, "Set: %s", p2sm_sma_enabled() ? "enabled" : "disabled");
+    } else if (strcmp(argv[1], "off") == 0) {
+        p2sm_set_sma_enabled(false);
+        shprint(sh, "Set: %s", p2sm_sma_enabled() ? "enabled" : "disabled");
+    } else if (strcmp(argv[1], "toggle") == 0) {
+        const bool current = p2sm_sma_enabled();
+        p2sm_set_sma_enabled(!current);
+        shprint(sh, "Set: %s", p2sm_sma_enabled() ? "enabled" : "disabled");
+    } else if (strcmp(argv[1], "window") == 0) {
+        if (argc < 3) {
+            shprint(sh, "Window size: %d", p2sm_get_sma_window());
+            return 0;
+        }
+        
+        if (strcmp(argv[2], "get") == 0) {
+            shprint(sh, "Window size: %d", p2sm_get_sma_window());
+        } else if (strcmp(argv[2], "set") == 0) {
+            if (argc < 4) {
+                shprint(sh, "Usage: p2sm sma window set <1-255>\n");
+                return -EINVAL;
+            }
+            char *endptr;
+            const uint8_t val = strtoul(argv[3], &endptr, 10);
+            if (val < 1) {
+                shprint(sh, "Error: window size must be at least 1");
+                return -EINVAL;
+            }
+            p2sm_set_sma_window(val);
+            shprint(sh, "Window size set to: %d", p2sm_get_sma_window());
+        } else {
+            shprint(sh, "Usage: p2sm sma window <get|set>\n");
+            return -EINVAL;
+        }
+    } else {
+        shprint(sh, "Usage: p2sm sma <get|set|on|off|toggle|window>\n");
+        return -EINVAL;
+    }
+
+    return 0;
+}
+#endif
+
 static int cmd_status(const struct shell *sh, const size_t argc, char **argv) {
     shprint(sh, "----- General -----");
     shprint(sh, "Twist scroll: %s", p2sm_twist_enabled() ? "enabled" : "disabled");
     shprint(sh, "Twist reversed: %s", p2sm_twist_is_reversed() ? "yes" : "no");
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    shprint(sh, "SMA smoothing: %s", p2sm_sma_enabled() ? "enabled" : "disabled");
+    shprint(sh, "SMA window: %d", p2sm_get_sma_window());
+#endif
     shprint(sh, "");
 
     shprint(sh, "----- Sensitivity -----");
@@ -261,6 +328,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_p2sm,
     SHELL_CMD(status, NULL, "Show current configuration", cmd_status),
     SHELL_CMD(twist, NULL, "Change status of twist scroll", cmd_twist),
     SHELL_CMD(sens, NULL, "Change sensitivity", cmd_sens),
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
+    SHELL_CMD(sma, NULL, "Control SMA smoothing", cmd_sma),
+#endif
     SHELL_CMD(behavior, &sub_behavior, "Manage behaviors", NULL),
     SHELL_SUBCMD_SET_END
 );
