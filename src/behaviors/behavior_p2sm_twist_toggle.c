@@ -87,6 +87,9 @@ static int behavior_p2sm_twist_toggle_init(const struct device *dev) {
 
 static const struct behavior_driver_api behavior_p2sm_twist_toggle_driver_api = {
     .binding_pressed = on_p2sm_twist_toggle_binding_pressed,
+#if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+    .get_parameter_metadata = zmk_behavior_get_empty_param_metadata,
+#endif // IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
 };
 
 #define P2SM_TWIST_TOGGLE_INST(n)                                                                              \
