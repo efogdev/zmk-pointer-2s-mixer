@@ -17,17 +17,21 @@
 #include <zephyr/settings/settings.h>
 #endif
 
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+#include <zmk_runtime_config/runtime_config.h>
+#else
+#define ZRC_GET(key, default_val) (default_val)
+#endif
+
 #define DT_DRV_COMPAT zmk_pointer_2s_mixer
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static struct device *g_dev = NULL;
 static void twist_filter_cleanup_work_cb(struct k_work *work);
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
 static void twist_feedback_off_work_cb(struct k_work *work);
 static void twist_feedback_extra_delay_work_cb(struct k_work *work);
 static void twist_feedback_cooldown_work_cb(struct k_work *work);
-#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
 static float g_from_settings[2] = { -1, -1 };
@@ -88,7 +92,6 @@ struct zip_pointer_2s_mixer_data {
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     uint16_t twist_accumulator;
     int8_t twist_feedback_direction;
     struct k_work_delayable twist_feedback_off_work;
@@ -98,7 +101,6 @@ struct zip_pointer_2s_mixer_data {
     uint32_t feedback_start_time;
     uint32_t feedback_cooldown_until;
     bool feedback_is_in_cooldown;
-#endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
     float sma_buffer[CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX][2];
@@ -190,8 +192,8 @@ static int process_and_report(const struct device *dev) {
         data->values.s2_y = 0;
     }
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER)
-    if (now - data->last_rpt_time_twist < CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION) {
+    if (ZRC_GET("p2sm/scroll_dis_ptr", CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER) &&
+        now - data->last_rpt_time_twist < (uint32_t)ZRC_GET("p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION)) {
         data->last_rpt_time = now;
         data->rpt_x_remainder = 0;
         data->rpt_y_remainder = 0;
@@ -199,7 +201,6 @@ static int process_and_report(const struct device *dev) {
         data->rpt_y = 0;
         return 0;
     }
-#endif
 
     data->rpt_x = (int16_t) data->rpt_x_remainder;
     data->rpt_y = (int16_t) data->rpt_y_remainder;
@@ -218,7 +219,7 @@ static int process_and_report(const struct device *dev) {
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
-        if (abs(data->rpt_x) > CONFIG_POINTER_2S_MIXER_STEADY_THRES || abs(data->rpt_y) > CONFIG_POINTER_2S_MIXER_STEADY_THRES) {
+        if (abs(data->rpt_x) > ZRC_GET("p2sm/steady_thres", CONFIG_POINTER_2S_MIXER_STEADY_THRES) || abs(data->rpt_y) > ZRC_GET("p2sm/steady_thres", CONFIG_POINTER_2S_MIXER_STEADY_THRES)) {
             data->last_sig_move = now;
         }
 
@@ -332,14 +333,14 @@ static float calculate_twist(const struct device *dev) {
         data->ema_delta_y = delta_y;
         data->ema_initialized = true;
     } else {
-        const float alpha = (float) CONFIG_POINTER_2S_MIXER_EMA_ALPHA / 100;
+        const float alpha = (float) ZRC_GET("p2sm/ema_alpha", CONFIG_POINTER_2S_MIXER_EMA_ALPHA) / 100.0f;
         data->ema_translation = alpha * translation + (1.0f - alpha) * data->ema_translation;
         data->ema_delta_y = alpha * delta_y + (1.0f - alpha) * data->ema_delta_y;
     }
 
     const uint16_t avg_translation = (uint16_t) data->ema_translation;
     const uint16_t avg_delta_y = (uint16_t) data->ema_delta_y;
-    const uint16_t max_mag = avg_translation * CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL / CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV;
+    const uint16_t max_mag = avg_translation * ZRC_GET("p2sm/dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL) / ZRC_GET("p2sm/dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV);
     const float result = ((avg_delta_y - config->twist_thres) > max_mag ? avg_delta_y - avg_translation : 0) * (s1_y > s2_y ? -1 : 1);
     const int int_result = abs((int) result);
 
@@ -374,7 +375,7 @@ static float calculate_twist(const struct device *dev) {
         return 0;
     }
 
-    if (data->last_sig_move - now < CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN) {
+    if (data->last_sig_move - now < (uint32_t)ZRC_GET("p2sm/steady_cd", CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN)) {
         LOG_DBG("Discarded twist (reason = steady_cooldown)");
         data->debounce_start = now;
         data->last_twist = now;
@@ -384,9 +385,10 @@ static float calculate_twist(const struct device *dev) {
     data->last_twist = now;
     data->last_twist_direction = direction;
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN) || IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
-    k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
-#endif
+    if (IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN) ||
+        ZRC_GET("p2sm/feedback_en", CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)) {
+        k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
+    }
 
     LOG_DBG("Scroll value calculated: %d", (int) result);
     return result;
@@ -398,9 +400,7 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
     const struct device *dev = dwork_data->dev;
     struct zip_pointer_2s_mixer_data *data = dev->data;
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     data->twist_feedback_direction = -1;
-#endif
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN)
     data->last_twist_direction = -1;
@@ -486,56 +486,57 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             data->rpt_twist_remainder -= twist_int;
             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, data->twist_reversed ? -twist_int : twist_int, true, K_NO_WAIT);
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
-            data->twist_accumulator += abs(twist_int);
+            if (ZRC_GET("p2sm/feedback_en", CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)) {
+                data->twist_accumulator += abs(twist_int);
 
-            const bool direction = twist_float > 0;
-            if (config->feedback_gpios.port != NULL &&
-                (data->twist_accumulator >= config->twist_feedback_threshold || data->twist_feedback_direction != direction) &&
-                config->twist_feedback_threshold > 0) {
-                data->twist_accumulator = 0;
+                const bool direction = twist_float > 0;
+                if (config->feedback_gpios.port != NULL &&
+                    (data->twist_accumulator >= config->twist_feedback_threshold || data->twist_feedback_direction != direction) &&
+                    config->twist_feedback_threshold > 0) {
+                    data->twist_accumulator = 0;
 
-                if (data->feedback_is_in_cooldown && now < data->feedback_cooldown_until) {
-                    LOG_DBG("Twist feedback skipped (in cooldown until %d)", data->feedback_cooldown_until - now);
-                    data->twist_feedback_direction = direction;
-                    return 0;
-                }
+                    if (data->feedback_is_in_cooldown && now < data->feedback_cooldown_until) {
+                        LOG_DBG("Twist feedback skipped (in cooldown until %d)", data->feedback_cooldown_until - now);
+                        data->twist_feedback_direction = direction;
+                        return 0;
+                    }
 
-                if (data->feedback_start_time > 0 && (now - data->feedback_start_time) >= CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS) {
-                    k_work_cancel_delayable(&data->twist_feedback_off_work);
-                    k_work_cancel_delayable(&data->twist_feedback_extra_delay_work);
+                    if (data->feedback_start_time > 0 && (now - data->feedback_start_time) >= (uint32_t)ZRC_GET("p2sm/fb_max_cont", CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS)) {
+                        k_work_cancel_delayable(&data->twist_feedback_off_work);
+                        k_work_cancel_delayable(&data->twist_feedback_extra_delay_work);
 
-                    gpio_pin_set_dt(&config->feedback_gpios, 0);
+                        gpio_pin_set_dt(&config->feedback_gpios, 0);
+                        if (config->feedback_extra_gpios.port != NULL) {
+                            gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
+                        }
+
+                        data->feedback_start_time = 0;
+                        data->feedback_is_in_cooldown = true;
+                        const int32_t fb_cooldown = ZRC_GET("p2sm/fb_cooldown", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
+                        data->feedback_cooldown_until = now + fb_cooldown;
+                        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(fb_cooldown));
+
+                        LOG_DBG("Twist feedback forced off after max continuous duration, cooldown for %d ms", fb_cooldown);
+                        data->twist_feedback_direction = direction;
+                        return 0;
+                    }
+
+                    if (data->feedback_start_time == 0) {
+                        data->feedback_start_time = now;
+                    }
+
                     if (config->feedback_extra_gpios.port != NULL) {
-                        gpio_pin_set_dt(&config->feedback_extra_gpios, data->previous_feedback_extra_state);
+                        data->previous_feedback_extra_state = gpio_pin_get_dt(&config->feedback_extra_gpios);
+                        if (gpio_pin_set_dt(&config->feedback_extra_gpios, 1) != 0) {
+                            LOG_ERR("Failed to set twist feedback extra GPIO");
+                        }
                     }
 
-                    data->feedback_start_time = 0;
-                    data->feedback_is_in_cooldown = true;
-                    data->feedback_cooldown_until = now + CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN;
-                    k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN));
-
-                    LOG_DBG("Twist feedback forced off after max continuous duration, cooldown for %d ms", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
-                    data->twist_feedback_direction = direction;
-                    return 0;
+                    k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(MAX(1, config->twist_feedback_delay)));
                 }
 
-                if (data->feedback_start_time == 0) {
-                    data->feedback_start_time = now;
-                }
-
-                if (config->feedback_extra_gpios.port != NULL) {
-                    data->previous_feedback_extra_state = gpio_pin_get_dt(&config->feedback_extra_gpios);
-                    if (gpio_pin_set_dt(&config->feedback_extra_gpios, 1) != 0) {
-                        LOG_ERR("Failed to set twist feedback extra GPIO");
-                    }
-                }
-
-                k_work_reschedule(&data->twist_feedback_extra_delay_work, K_MSEC(MAX(1, config->twist_feedback_delay)));
+                data->twist_feedback_direction = direction;
             }
-
-            data->twist_feedback_direction = direction;
-#endif
         }
     }
 
@@ -623,7 +624,6 @@ static int data_init(const struct device *dev) {
     LOG_DBG("  > Surface trackpoint 1 ≈ (%d, %d, %d)", (int) surface_p1[0], (int) surface_p1[1], (int) surface_p1[2]);
     LOG_DBG("  > Surface trackpoint 2 ≈ (%d, %d, %d)", (int) surface_p2[0], (int) surface_p2[1], (int) surface_p2[2]);
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
     if (config->feedback_gpios.port != NULL) {
         if (gpio_pin_configure_dt(&config->feedback_gpios, GPIO_OUTPUT) != 0) {
             LOG_WRN("Failed to configure twist feedback GPIO");
@@ -650,7 +650,6 @@ static int data_init(const struct device *dev) {
     data->feedback_cooldown_until = 0;
     data->feedback_is_in_cooldown = false;
     k_work_init_delayable(&data->twist_feedback_cooldown_work, twist_feedback_cooldown_work_cb);
-#endif
 
     g_dev = (struct device *) dev;
     data->initialized = true;
@@ -673,7 +672,6 @@ static int data_init(const struct device *dev) {
     return 1;
 }
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)
 static void twist_feedback_off_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     const struct zip_pointer_2s_mixer_data *data = CONTAINER_OF(dwork, struct zip_pointer_2s_mixer_data, twist_feedback_off_work);
@@ -695,8 +693,8 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     const uint32_t now = (uint32_t) k_uptime_get();
     const uint16_t elapsed = data->feedback_start_time > 0 ? now - data->feedback_start_time : 0;
-    const uint16_t remaining_duration = CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS > elapsed
-        ? CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS - elapsed  : 0;
+    const int32_t fb_max_cont = ZRC_GET("p2sm/fb_max_cont", CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS);
+    const uint16_t remaining_duration = fb_max_cont > elapsed ? fb_max_cont - elapsed : 0;
     const uint16_t feedback_duration = config->twist_feedback_duration < remaining_duration
         ? config->twist_feedback_duration : remaining_duration;
 
@@ -710,9 +708,10 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
         gpio_pin_set_dt(&config->feedback_gpios, 0);
         data->feedback_start_time = 0;
         data->feedback_is_in_cooldown = true;
-        data->feedback_cooldown_until = now + CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN;
-        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN));
-        LOG_DBG("Twist feedback after delay immediately off, max duration reached, cooldown for %d ms", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
+        const int32_t fb_cooldown = ZRC_GET("p2sm/fb_cooldown", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
+        data->feedback_cooldown_until = now + fb_cooldown;
+        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(fb_cooldown));
+        LOG_DBG("Twist feedback after delay immediately off, max duration reached, cooldown for %d ms", fb_cooldown);
     }
 }
 
@@ -724,7 +723,6 @@ static void twist_feedback_cooldown_work_cb(struct k_work *work) {
     data->feedback_cooldown_until = 0;
     LOG_DBG("Twist feedback cooldown period ended");
 }
-#endif
 
 static struct zmk_input_processor_driver_api sy_driver_api = {
     .handle_event = sy_handle_event,
@@ -994,6 +992,23 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
 
 SETTINGS_STATIC_HANDLER_DEFINE(p2sm_settings, P2SM_SETTINGS_PREFIX, NULL, p2sm_settings_load_cb, NULL, NULL);
 #endif
+
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+static int p2sm_register_runtime_params(void) {
+    zrc_register("p2sm/ema_alpha",       CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 100);
+    zrc_register("p2sm/feedback_en",     IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1);
+    zrc_register("p2sm/scroll_dis_ptr",  CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER, 0, 1);
+    zrc_register("p2sm/ptr_after_scroll",CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 10000);
+    zrc_register("p2sm/dy_mag_mul",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100);
+    zrc_register("p2sm/dy_mag_div",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100);
+    zrc_register("p2sm/fb_max_cont",     CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 60000);
+    zrc_register("p2sm/fb_cooldown",     CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 60000);
+    zrc_register("p2sm/steady_thres",    CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 10000);
+    zrc_register("p2sm/steady_cd",       CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 60000);
+    return 0;
+}
+SYS_INIT(p2sm_register_runtime_params, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE);
+#endif /* CONFIG_ZMK_RUNTIME_CONFIG */
 
 static struct zip_pointer_2s_mixer_data data = {};
 static struct zip_pointer_2s_mixer_config config = {
