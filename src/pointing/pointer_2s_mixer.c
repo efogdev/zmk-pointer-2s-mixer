@@ -92,7 +92,7 @@ struct zip_pointer_2s_mixer_data {
     uint32_t last_sensor1_report, last_sensor2_report;
 #endif
 
-    uint16_t twist_accumulator;
+    uint32_t twist_accumulator;
     int8_t twist_feedback_direction;
     struct k_work_delayable twist_feedback_off_work;
     struct k_work_delayable twist_feedback_extra_delay_work;
@@ -692,10 +692,10 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
     const struct device *dev = data->dev;
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     const uint32_t now = (uint32_t) k_uptime_get();
-    const uint16_t elapsed = data->feedback_start_time > 0 ? now - data->feedback_start_time : 0;
+    const uint32_t elapsed = data->feedback_start_time > 0 ? now - data->feedback_start_time : 0;
     const int32_t fb_max_cont = ZRC_GET("p2sm/fb_max_cont", CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS);
-    const uint16_t remaining_duration = fb_max_cont > elapsed ? fb_max_cont - elapsed : 0;
-    const uint16_t feedback_duration = config->twist_feedback_duration < remaining_duration
+    const uint32_t remaining_duration = (uint32_t)fb_max_cont > elapsed ? (uint32_t)fb_max_cont - elapsed : 0;
+    const uint32_t feedback_duration = config->twist_feedback_duration < remaining_duration
         ? config->twist_feedback_duration : remaining_duration;
 
     if (feedback_duration > 0) {
@@ -995,16 +995,16 @@ SETTINGS_STATIC_HANDLER_DEFINE(p2sm_settings, P2SM_SETTINGS_PREFIX, NULL, p2sm_s
 
 #if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
 static int p2sm_register_runtime_params(void) {
-    zrc_register("p2sm/ema_alpha",       CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 100);
+    zrc_register("p2sm/ema_alpha",       CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50);
     zrc_register("p2sm/feedback_en",     IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1);
     zrc_register("p2sm/scroll_dis_ptr",  CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER, 0, 1);
-    zrc_register("p2sm/ptr_after_scroll",CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 10000);
+    zrc_register("p2sm/ptr_after_scroll",CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000);
     zrc_register("p2sm/dy_mag_mul",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100);
     zrc_register("p2sm/dy_mag_div",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100);
-    zrc_register("p2sm/fb_max_cont",     CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 60000);
-    zrc_register("p2sm/fb_cooldown",     CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 60000);
-    zrc_register("p2sm/steady_thres",    CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 10000);
-    zrc_register("p2sm/steady_cd",       CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 60000);
+    zrc_register("p2sm/fb_max_cont",     CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 5000);
+    zrc_register("p2sm/fb_cooldown",     CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000);
+    zrc_register("p2sm/steady_thres",    CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255);
+    zrc_register("p2sm/steady_cd",       CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000);
     return 0;
 }
 SYS_INIT(p2sm_register_runtime_params, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE);

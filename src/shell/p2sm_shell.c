@@ -58,7 +58,12 @@ static int cmd_sens(const struct shell *sh, const size_t argc, char **argv) {
         }
 
         char *endptr;
-        const uint16_t parsed = strtoul(argv[3], &endptr, 10);
+        unsigned long raw_parsed = strtoul(argv[3], &endptr, 10);
+        if (endptr == argv[3] || *endptr != '\0' || raw_parsed > 65535) {
+            shprint(sh, "Error: invalid value (0-65535)");
+            return -EINVAL;
+        }
+        const uint16_t parsed = (uint16_t)raw_parsed;
 
         if (is_pointer) {
             p2sm_set_move_coef((float) parsed / 1000);
@@ -115,7 +120,12 @@ static int cmd_sma(const struct shell *sh, const size_t argc, char **argv) {
         }
         
         char *endptr;
-        const uint8_t val = strtoul(argv[2], &endptr, 10);
+        unsigned long raw_val = strtoul(argv[2], &endptr, 10);
+        if (endptr == argv[2] || *endptr != '\0') {
+            shprint(sh, "Error: invalid value (0 or 1)");
+            return -EINVAL;
+        }
+        const uint8_t val = (uint8_t)(raw_val != 0);
         p2sm_set_sma_enabled(val != 0);
         shprint(sh, "Set: %s", p2sm_sma_enabled() ? "enabled" : "disabled");
     } else if (strcmp(argv[1], "on") == 0) {
@@ -142,11 +152,12 @@ static int cmd_sma(const struct shell *sh, const size_t argc, char **argv) {
                 return -EINVAL;
             }
             char *endptr;
-            const uint8_t val = strtoul(argv[3], &endptr, 10);
-            if (val < 1) {
-                shprint(sh, "Error: window size must be at least 1");
+            unsigned long raw_window = strtoul(argv[3], &endptr, 10);
+            if (endptr == argv[3] || *endptr != '\0' || raw_window < 1 || raw_window > CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX) {
+                shprint(sh, "Error: window size must be 1-%d", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX);
                 return -EINVAL;
             }
+            const uint8_t val = (uint8_t)raw_window;
             p2sm_set_sma_window(val);
             shprint(sh, "Window size set to: %d", p2sm_get_sma_window());
         } else {
@@ -193,15 +204,23 @@ static int cmd_status(const struct shell *sh, const size_t argc, char **argv) {
         shprint(sh, "  feedback_duration: %d", cfg.feedback_duration);
         if (cfg.feedback_wrap_pattern_len > 0 && (cfg.wrap || cfg.feedback_on_limit)) {
             char pattern_str[128] = {0};
-            int offset = 0;
-            offset += snprintf(pattern_str + offset, sizeof(pattern_str) - offset, "[");
+            size_t pos = 0;
+#define P2SM_APPEND(fmt, ...) \
+    do { \
+        if (pos < sizeof(pattern_str)) { \
+            int _n = snprintf(pattern_str + pos, sizeof(pattern_str) - pos, fmt, ##__VA_ARGS__); \
+            if (_n > 0) pos += MIN((size_t)_n, sizeof(pattern_str) - pos); \
+        } \
+    } while (0)
+            P2SM_APPEND("[");
             for (uint8_t j = 0; j < cfg.feedback_wrap_pattern_len; j++) {
                 if (j > 0) {
-                    offset += snprintf(pattern_str + offset, sizeof(pattern_str) - offset, ", ");
+                    P2SM_APPEND(", ");
                 }
-                offset += snprintf(pattern_str + offset, sizeof(pattern_str) - offset, "%d", cfg.feedback_wrap_pattern[j]);
+                P2SM_APPEND("%d", cfg.feedback_wrap_pattern[j]);
             }
-            snprintf(pattern_str + offset, sizeof(pattern_str) - offset, "]");
+            P2SM_APPEND("]");
+#undef P2SM_APPEND
             shprint(sh, "  feedback_wrap_pattern: %s", pattern_str);
         }
     }
@@ -226,8 +245,13 @@ static int cmd_behavior_set(const struct shell *sh, const size_t argc, char **ar
     }
 
     char *endptr;
-    const uint8_t id = strtoul(argv[1], &endptr, 10);
-    
+    unsigned long raw_id = strtoul(argv[1], &endptr, 10);
+    if (endptr == argv[1] || *endptr != '\0' || raw_id > 255) {
+        shprint(sh, "Error: invalid behavior id");
+        return -EINVAL;
+    }
+    const uint8_t id = (uint8_t)raw_id;
+
     if (id >= p2sm_sens_num_behaviors()) {
         shprint(sh, "Error: Invalid behavior id %d (max: %d)", id, p2sm_sens_num_behaviors() - 1);
         return -EINVAL;
@@ -243,7 +267,7 @@ static int cmd_behavior_set(const struct shell *sh, const size_t argc, char **ar
         .wrap = (bool)strtoul(argv[6], &endptr, 10),
         .feedback_on_limit = (bool)strtoul(argv[7], &endptr, 10),
         .feedback_duration = (uint16_t)strtoul(argv[8], &endptr, 10),
-        .feedback_wrap_pattern_len = (uint8_t)strtoul(argv[9], &endptr, 10),
+        .feedback_wrap_pattern_len = (uint8_t)MIN(strtoul(argv[9], &endptr, 10), CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_ARR_VALUES),
         .scroll = orig_cfg.scroll,
         .display_name = orig_cfg.display_name,
     };
