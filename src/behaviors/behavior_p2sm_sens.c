@@ -81,9 +81,9 @@ static void log_sensitivity(const char* prefix, const float num, const bool debu
     const int32_t frac_part = (int32_t) (num * 100 * 100) % 100;
 
     if (frac_part != 0) {
-        sprintf(log_buf, "%s~%d.%02d%%", prefix, int_part, frac_part);
+        snprintf(log_buf, sizeof(log_buf), "%s~%d.%02d%%", prefix, int_part, frac_part);
     } else {
-        sprintf(log_buf, "%s%d%%", prefix, int_part);
+        snprintf(log_buf, sizeof(log_buf), "%s%d%%", prefix, int_part);
     }
 
     if (debug) {
@@ -492,7 +492,7 @@ static void p2sm_sens_save_work_cb(struct k_work *work) {
         const struct behavior_p2sm_sens_config *cfg = dev->config;
         
         char key[32];
-        sprintf(key, "%s/beh/%d", P2SM_SETTINGS_PREFIX, i);
+        snprintf(key, sizeof(key), "%s/beh/%d", P2SM_SETTINGS_PREFIX, i);
         const int err = settings_save_one(key, &cfg->values, sizeof(struct p2sm_sens_behavior_config));
         if (err < 0) {
             LOG_ERR("Failed to save behavior %d settings: %d", i, err);

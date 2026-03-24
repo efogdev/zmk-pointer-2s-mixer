@@ -734,7 +734,7 @@ static void p2sm_save_work_cb(struct k_work *work) {
     const float values[2] = { data->move_coef, data->twist_coef };
 
     char key[36];
-    sprintf(key, "%s/global", P2SM_SETTINGS_PREFIX);
+    snprintf(key, sizeof(key), "%s/global", P2SM_SETTINGS_PREFIX);
     int err = settings_save_one(key, values, sizeof(values));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
@@ -742,20 +742,20 @@ static void p2sm_save_work_cb(struct k_work *work) {
         LOG_DBG("Sensitivity settings saved");
     }
 
-    sprintf(key, "%s/twist_reversed", P2SM_SETTINGS_PREFIX);
+    snprintf(key, sizeof(key), "%s/twist_reversed", P2SM_SETTINGS_PREFIX);
     err = settings_save_one(key, &data->twist_reversed, sizeof(data->twist_reversed));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    sprintf(key, "%s/sma_en", P2SM_SETTINGS_PREFIX);
+    snprintf(key, sizeof(key), "%s/sma_en", P2SM_SETTINGS_PREFIX);
     err = settings_save_one(key, &data->sma_enabled, sizeof(data->sma_enabled));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);
     }
 
-    sprintf(key, "%s/sma_win", P2SM_SETTINGS_PREFIX);
+    snprintf(key, sizeof(key), "%s/sma_win", P2SM_SETTINGS_PREFIX);
     err = settings_save_one(key, &data->sma_window_size, sizeof(data->sma_window_size));
     if (err < 0) {
         LOG_ERR("Failed to save settings %d", err);

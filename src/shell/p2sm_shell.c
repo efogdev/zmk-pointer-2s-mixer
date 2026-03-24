@@ -20,14 +20,15 @@ do { \
     shell_print((_sh), _fmt, ##__VA_ARGS__); \
 } while (0)
 
+#define SMALL_BUF_LEN 12
 static char* ftoi(const float num) {
     const int32_t int_part = (int32_t) (num * 100);
     const int32_t frac_part = (int32_t) (num * 100 * 100) % 100;
-    char* log_buf = malloc(12 * sizeof(char));
+    char* log_buf = malloc(SMALL_BUF_LEN * sizeof(char));
     if (frac_part != 0) {
-        sprintf(log_buf, "~%d.%02d%%", int_part, frac_part);
+        snprintf(log_buf, SMALL_BUF_LEN * sizeof(char), "~%d.%02d%%", int_part, frac_part);
     } else {
-        sprintf(log_buf, "%d%%", int_part);
+        snprintf(log_buf, SMALL_BUF_LEN * sizeof(char), "%d%%", int_part);
     }
 
     return log_buf;
