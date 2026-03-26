@@ -219,7 +219,8 @@ static int process_and_report(const struct device *dev) {
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
-        if (abs(data->rpt_x) > ZRC_GET("p2sm/steady_thres", CONFIG_POINTER_2S_MIXER_STEADY_THRES) || abs(data->rpt_y) > ZRC_GET("p2sm/steady_thres", CONFIG_POINTER_2S_MIXER_STEADY_THRES)) {
+        const int32_t steady_thres = ZRC_GET("p2sm/steady_thres", CONFIG_POINTER_2S_MIXER_STEADY_THRES);
+        if (abs(data->rpt_x) > steady_thres || abs(data->rpt_y) > steady_thres) {
             data->last_sig_move = now;
         }
 
