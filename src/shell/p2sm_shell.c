@@ -174,7 +174,7 @@ static int cmd_sma(const struct shell *sh, const size_t argc, char **argv) {
 #endif
 
 static int cmd_status(const struct shell *sh, const size_t argc, char **argv) {
-    shprint(sh, "----- General -----");
+    shprint(sh, "General:");
     shprint(sh, "Twist scroll: %s", p2sm_twist_enabled() ? "enabled" : "disabled");
     shprint(sh, "Twist reversed: %s", p2sm_twist_is_reversed() ? "yes" : "no");
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
@@ -183,14 +183,14 @@ static int cmd_status(const struct shell *sh, const size_t argc, char **argv) {
 #endif
     shprint(sh, "");
 
-    shprint(sh, "----- Sensitivity -----");
+    shprint(sh, "Sensitivity:");
     shprint(sh, "Pointer: %s", ftoi(p2sm_get_move_coef()));
     shprint(sh, "Twist scroll: %s", ftoi(p2sm_get_twist_coef()));
     shprint(sh, "");
 
-    shprint(sh, "----- Behaviors -----");
+    shprint(sh, "Behaviors:");
     const uint8_t num_behaviors = p2sm_sens_num_behaviors();
-    shprint(sh, "Number of behaviors: %d", num_behaviors);
+    shprint(sh, "Behaviors: %d", num_behaviors);
     
     for (uint8_t i = 0; i < num_behaviors; i++) {
         const struct p2sm_sens_behavior_config cfg = p2sm_sens_behavior_get_config(i);
@@ -230,17 +230,8 @@ static int cmd_status(const struct shell *sh, const size_t argc, char **argv) {
 
 static int cmd_behavior_set(const struct shell *sh, const size_t argc, char **argv) {
     if (argc < 10) {
-        shprint(sh, "Usage: p2sm behavior set <id> <step> <min_step> <max_step> <max_mult> <wrap> <fb_on_limit> <fb_duration> <fb_pattern_len> [pattern_values...]");
-        shprint(sh, "  id: behavior index (0-%d)", p2sm_sens_num_behaviors() - 1);
-        shprint(sh, "  step: step size (1-1000)");
-        shprint(sh, "  min_step: minimum step");
-        shprint(sh, "  max_step: maximum step");
-        shprint(sh, "  max_mult: maximum multiplier");
-        shprint(sh, "  wrap: wrap around (0/1)");
-        shprint(sh, "  fb_on_limit: feedback on limit (0/1)");
-        shprint(sh, "  fb_duration: feedback duration in ms");
-        shprint(sh, "  fb_pattern_len: feedback pattern length");
-        shprint(sh, "  pattern_values: pattern values (if pattern_len > 0)");
+        shprint(sh, "Usage: p2sm behavior set <0-%d> <step> <min> <max> <mult> <wrap> <fb_lim> <fb_dur> <fb_len> [pattern...]",
+                p2sm_sens_num_behaviors() - 1);
         return -EINVAL;
     }
 
