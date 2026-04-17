@@ -31,6 +31,10 @@ config POINTER_2S_MIXER_REMAINDER_TTL
   int "X/Y remainder TTL, msec"
   default 16
 
+config POINTER_2S_MIXER_TWIST_EN
+  bool "Enable twist to scroll"
+  default y
+
 config POINTER_2S_MIXER_TWIST_REMAINDER_TTL
   int "Scroll remainder TTL, msec"
   default 32

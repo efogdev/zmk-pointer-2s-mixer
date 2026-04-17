@@ -21,14 +21,14 @@ do { \
 } while (0)
 
 #define SMALL_BUF_LEN 12
-static char* ftoi(const float num) {
+static __noinline char* ftoi(const float num) {
     const int32_t int_part = (int32_t) (num * 100);
     const int32_t frac_part = (int32_t) (num * 100 * 100) % 100;
-    char* log_buf = malloc(SMALL_BUF_LEN * sizeof(char));
+    static char log_buf[SMALL_BUF_LEN];
     if (frac_part != 0) {
-        snprintf(log_buf, SMALL_BUF_LEN * sizeof(char), "~%d.%02d%%", int_part, frac_part);
+        snprintf(log_buf, SMALL_BUF_LEN, "~%d.%02d%%", int_part, frac_part);
     } else {
-        snprintf(log_buf, SMALL_BUF_LEN * sizeof(char), "%d%%", int_part);
+        snprintf(log_buf, SMALL_BUF_LEN, "%d%%", int_part);
     }
 
     return log_buf;
@@ -58,7 +58,7 @@ static int cmd_sens(const struct shell *sh, const size_t argc, char **argv) {
         }
 
         char *endptr;
-        unsigned long raw_parsed = strtoul(argv[3], &endptr, 10);
+        const unsigned long raw_parsed = strtoul(argv[3], &endptr, 10);
         if (endptr == argv[3] || *endptr != '\0' || raw_parsed > 65535) {
             shprint(sh, "Error: invalid value (0-65535)");
             return -EINVAL;
@@ -120,7 +120,7 @@ static int cmd_sma(const struct shell *sh, const size_t argc, char **argv) {
         }
         
         char *endptr;
-        unsigned long raw_val = strtoul(argv[2], &endptr, 10);
+        const unsigned long raw_val = strtoul(argv[2], &endptr, 10);
         if (endptr == argv[2] || *endptr != '\0') {
             shprint(sh, "Error: invalid value (0 or 1)");
             return -EINVAL;
@@ -152,7 +152,7 @@ static int cmd_sma(const struct shell *sh, const size_t argc, char **argv) {
                 return -EINVAL;
             }
             char *endptr;
-            unsigned long raw_window = strtoul(argv[3], &endptr, 10);
+            const unsigned long raw_window = strtoul(argv[3], &endptr, 10);
             if (endptr == argv[3] || *endptr != '\0' || raw_window < 1 || raw_window > CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX) {
                 shprint(sh, "Error: window size must be 1-%d", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX);
                 return -EINVAL;
@@ -245,7 +245,7 @@ static int cmd_behavior_set(const struct shell *sh, const size_t argc, char **ar
     }
 
     char *endptr;
-    unsigned long raw_id = strtoul(argv[1], &endptr, 10);
+    const unsigned long raw_id = strtoul(argv[1], &endptr, 10);
     if (endptr == argv[1] || *endptr != '\0' || raw_id > 255) {
         shprint(sh, "Error: invalid behavior id");
         return -EINVAL;
@@ -258,7 +258,6 @@ static int cmd_behavior_set(const struct shell *sh, const size_t argc, char **ar
     }
 
     const struct p2sm_sens_behavior_config orig_cfg = p2sm_sens_behavior_get_config(id);
-
     struct p2sm_sens_behavior_config cfg = {
         .step = (uint16_t)strtoul(argv[2], &endptr, 10),
         .min_step = (uint16_t)strtoul(argv[3], &endptr, 10),

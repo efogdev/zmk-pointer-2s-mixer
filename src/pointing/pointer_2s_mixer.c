@@ -473,7 +473,8 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         process_and_report(dev);
     }
 
-    if (data->twist_enabled && now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
+    const bool global_enabled = ZRC_GET("p2sm/twist_global_en", IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN));
+    if (data->twist_enabled && global_enabled && now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
         const float twist_float = calculate_twist(dev) * data->twist_coef;
         if (now - data->last_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
             data->rpt_twist_remainder = twist_float;
@@ -998,6 +999,7 @@ SETTINGS_STATIC_HANDLER_DEFINE(p2sm_settings, P2SM_SETTINGS_PREFIX, NULL, p2sm_s
 static int p2sm_register_runtime_params(void) {
     zrc_register("p2sm/ema_alpha",       CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50);
     zrc_register("p2sm/feedback_en",     IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1);
+    zrc_register("p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1);
     zrc_register("p2sm/scroll_dis_ptr",  CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER, 0, 1);
     zrc_register("p2sm/ptr_after_scroll",CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000);
     zrc_register("p2sm/dy_mag_mul",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100);
