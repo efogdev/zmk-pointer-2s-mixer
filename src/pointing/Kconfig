@@ -115,11 +115,11 @@ config POINTER_2S_MIXER_STEADY_COOLDOWN
 
 config POINTER_2S_MIXER_DEFAULT_MOVE_COEF
   int "Default pointer sensitivity in %"
-  default 20
+  default 25
 
 config POINTER_2S_MIXER_DEFAULT_TWIST_COEF
   int "Default twist scroll sensitivity in %"
-  default 5
+  default 25
 
 config POINTER_2S_MIXER_SMA_EN
   bool "Enable Simple Moving Average for pointer"
@@ -146,5 +146,18 @@ config POINTER_2S_MIXER_SMA_TIMEOUT
   depends on POINTER_2S_MIXER_SMA_EN
   help
     Discard SMA history after no data for this duration
+
+config POINTER_2S_MIXER_MEDIAN_EN
+  bool "Enable median filter"
+  default n
+
+config POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX
+  int "Median maximum window size"
+  default 24
+  range 3 48
+
+config POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE
+  int "Median default window size"
+  default 3
 
 endif # ZMK_POINTER_2S_MIXER

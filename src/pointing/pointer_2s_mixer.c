@@ -66,15 +66,14 @@ struct zip_pointer_2s_mixer_data {
     struct k_work_delayable twist_filter_cleanup_work;
 
     bool initialized, twist_enabled, twist_reversed;
+    bool s1_synced, s2_synced;
     uint32_t last_rpt_time, last_rpt_time_twist;
     int16_t rpt_x, rpt_y;
     float rpt_x_remainder, rpt_y_remainder, rpt_twist_remainder;
     float move_coef, twist_coef;
 
-    // accumulates NON-transformed X, Y movements
-    struct p2sm_dataframe values;
-
-    // accumulates transformed X, Y movements
+    struct p2sm_dataframe frame;
+    float rotated_x[2], rotated_y[2];
     struct p2sm_dataframe twist_values;
 
     // pre-calculated
@@ -109,11 +108,48 @@ struct zip_pointer_2s_mixer_data {
     uint8_t sma_window_size;
     uint32_t last_sma_time;
 #endif
+
+    int16_t median_buf[4][CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX];
+    uint8_t median_head[4];
+    uint8_t median_count[4];
 };
 
 static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
+
+static int16_t apply_median(int16_t *buf, uint8_t *head, uint8_t *count,
+                            uint8_t window, const int16_t sample) {
+    if (window < 2) {
+        return sample;
+    }
+    if (window > CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX) {
+        window = CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX;
+    }
+
+    buf[*head] = sample;
+    *head = (uint8_t) ((*head + 1) % window);
+    if (*count < window) {
+        (*count)++;
+    }
+
+    if (*count < window) {
+        return sample;
+    }
+
+    int16_t sorted[CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX];
+    memcpy(sorted, buf, window * sizeof(int16_t));
+    for (uint8_t i = 1; i < window; i++) {
+        const int16_t v = sorted[i];
+        int j = i;
+        while (j > 0 && sorted[j - 1] > v) {
+            sorted[j] = sorted[j - 1];
+            j--;
+        }
+        sorted[j] = v;
+    }
+    return sorted[window / 2];
+}
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
 static void apply_sma(struct zip_pointer_2s_mixer_data *data, float *x, float *y) {
@@ -153,43 +189,31 @@ static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const uint32_t now = (uint32_t) k_uptime_get();
     uint32_t dt = now - data->last_rpt_time;
-    float rotated_x = 0, rotated_y = 0;
 
-    if (data->values.s1_x != 0 || data->values.s1_y != 0) {
-        apply_rotation(data->rotation_matrix1, data->values.s1_x, data->values.s1_y, &rotated_x, &rotated_y);
-        data->twist_values.s1_x += rotated_x;
-        data->twist_values.s1_y += rotated_y;
-
-        apply_coef(data->move_coef, &rotated_x, &rotated_y);
-        if (dt > CONFIG_POINTER_2S_MIXER_REMAINDER_TTL) {
-            data->rpt_x_remainder = rotated_x;
-            data->rpt_y_remainder = rotated_y;
-        } else {
-            data->rpt_x_remainder += rotated_x;
-            data->rpt_y_remainder += rotated_y;
+    int16_t *twist_x[2] = { &data->twist_values.s1_x, &data->twist_values.s2_x };
+    int16_t *twist_y[2] = { &data->twist_values.s1_y, &data->twist_values.s2_y };
+    for (uint8_t s = 0; s < 2; s++) {
+        float rx = data->rotated_x[s];
+        float ry = data->rotated_y[s];
+        if (rx == 0 && ry == 0) {
+            continue;
         }
 
-        data->values.s1_x = 0;
-        data->values.s1_y = 0;
+        *twist_x[s] += (int16_t) rx;
+        *twist_y[s] += (int16_t) ry;
+
+        apply_coef(data->move_coef, &rx, &ry);
+        if (dt > CONFIG_POINTER_2S_MIXER_REMAINDER_TTL) {
+            data->rpt_x_remainder = rx;
+            data->rpt_y_remainder = ry;
+        } else {
+            data->rpt_x_remainder += rx;
+            data->rpt_y_remainder += ry;
+        }
+
+        data->rotated_x[s] = 0;
+        data->rotated_y[s] = 0;
         dt = 0;
-    }
-
-    if (data->values.s2_x != 0 || data->values.s2_y != 0) {
-        apply_rotation(data->rotation_matrix2, data->values.s2_x, data->values.s2_y, &rotated_x, &rotated_y);
-        data->twist_values.s2_x += rotated_x;
-        data->twist_values.s2_y += rotated_y;
-
-        apply_coef(data->move_coef, &rotated_x, &rotated_y);
-        if (dt > CONFIG_POINTER_2S_MIXER_REMAINDER_TTL) {
-            data->rpt_x_remainder = rotated_x;
-            data->rpt_y_remainder = rotated_y;
-        } else {
-            data->rpt_x_remainder += rotated_x;
-            data->rpt_y_remainder += rotated_y;
-        }
-
-        data->values.s2_x = 0;
-        data->values.s2_y = 0;
     }
 
     if (ZRC_GET("p2sm/scroll_dis_ptr", CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER) &&
@@ -224,6 +248,7 @@ static int process_and_report(const struct device *dev) {
             data->last_sig_move = now;
         }
 
+        // LOG_INF("fx = %d, fy = %d", data->rpt_x, data->rpt_y);
         if (have_x) {
             input_report(dev, INPUT_EV_REL, INPUT_REL_X, data->rpt_x, !have_y, K_NO_WAIT);
             data->rpt_x = 0;
@@ -423,11 +448,55 @@ static int line_sphere_intersection(const float r, const float x, const float y,
     return 1;
 }
 
+static void on_sensor_event(struct zip_pointer_2s_mixer_data *data, const uint8_t s,
+                            struct input_event *event, const bool frame_end, const uint32_t now) {
+    int16_t *fx = (s == 0) ? &data->frame.s1_x : &data->frame.s2_x;
+    int16_t *fy = (s == 0) ? &data->frame.s1_y : &data->frame.s2_y;
+    bool *synced = (s == 0) ? &data->s1_synced : &data->s2_synced;
+    float (*matrix)[3] = (s == 0) ? data->rotation_matrix1 : data->rotation_matrix2;
+    const uint8_t hb = (uint8_t) (s * 2);
+
+#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
+    uint32_t *last_report = (s == 0) ? &data->last_sensor1_report : &data->last_sensor2_report;
+    *last_report = now;
+#endif
+
+    if (event->code == INPUT_REL_X) {
+        *fx += event->value;
+    } else if (event->code == INPUT_REL_Y) {
+        *fy += event->value;
+    }
+
+    if (!frame_end) {
+        return;
+    }
+
+    int16_t dx = *fx;
+    int16_t dy = *fy;
+    *fx = 0;
+    *fy = 0;
+
+    if (ZRC_GET("p2sm/median_en", IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN))) {
+        const uint8_t window = (uint8_t) ZRC_GET("p2sm/median_w", CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE);
+        dx = apply_median(data->median_buf[hb],     &data->median_head[hb],     &data->median_count[hb],     window, dx);
+        dy = apply_median(data->median_buf[hb + 1], &data->median_head[hb + 1], &data->median_count[hb + 1], window, dy);
+    }
+
+    float rx, ry;
+    apply_rotation(matrix, (float) dx, (float) dy, &rx, &ry);
+    // LOG_INF("rx%d = %d, ry%d = %d", s+1, (int) rx, s+1, (int) ry);
+
+    data->rotated_x[s] += rx;
+    data->rotated_y[s] += ry;
+    *synced = true;
+}
+
 static int sy_handle_event(const struct device *dev, struct input_event *event, const uint32_t p1,
                            const uint32_t p2, struct zmk_input_processor_state *s) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const uint32_t now = (uint32_t) k_uptime_get();
+    const bool frame_end = event->sync;
 
     if (unlikely(!data->initialized)) {
         if (!data_init(dev)) {
@@ -437,25 +506,9 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     }
 
     if (p1 & INPUT_MIXER_SENSOR1) {
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
-        data->last_sensor1_report = now;
-#endif
-
-        if (event->code == INPUT_REL_X) {
-            data->values.s1_x += event->value;
-        } else if (event->code == INPUT_REL_Y) {
-            data->values.s1_y += event->value;
-        }
+        on_sensor_event(data, 0, event, frame_end, now);
     } else if (p1 & INPUT_MIXER_SENSOR2) {
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
-        data->last_sensor2_report = now;
-#endif
-
-        if (event->code == INPUT_REL_X) {
-            data->values.s2_x += event->value;
-        } else if (event->code == INPUT_REL_Y) {
-            data->values.s2_y += event->value;
-        }
+        on_sensor_event(data, 1, event, frame_end, now);
     }
 
     event->value = 0;
@@ -463,13 +516,19 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     if (unlikely(abs((int32_t) (data->last_sensor1_report - data->last_sensor2_report)) > CONFIG_POINTER_2S_MIXER_SYNC_WINDOW_MS)) {
-        memset(&data->values, 0, sizeof(struct p2sm_dataframe));
+        memset(&data->frame, 0, sizeof(struct p2sm_dataframe));
         memset(&data->twist_values, 0, sizeof(struct p2sm_dataframe));
+        memset(data->rotated_x, 0, sizeof(data->rotated_x));
+        memset(data->rotated_y, 0, sizeof(data->rotated_y));
+        data->s1_synced = false;
+        data->s2_synced = false;
         return 0;
     }
 #endif
 
-    if (now - data->last_rpt_time > config->sync_report_ms) {
+    if (data->s1_synced && data->s2_synced && now - data->last_rpt_time > config->sync_report_ms) {
+        data->s1_synced = false;
+        data->s2_synced = false;
         process_and_report(dev);
     }
 
@@ -671,6 +730,9 @@ static int data_init(const struct device *dev) {
     LOG_DBG("SMA buffers initialized: %d entries", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE);
 #endif
 
+    memset(data->median_buf, 0, sizeof(data->median_buf));
+    memset(data->median_head, 0, sizeof(data->median_head));
+    memset(data->median_count, 0, sizeof(data->median_count));
     return 1;
 }
 
@@ -1008,6 +1070,8 @@ static int p2sm_register_runtime_params(void) {
     zrc_register("p2sm/fb_cooldown",     CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000);
     zrc_register("p2sm/steady_thres",    CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255);
     zrc_register("p2sm/steady_cd",       CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000);
+    zrc_register("p2sm/median_en",       IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN), 0, 1);
+    zrc_register("p2sm/median_w",        CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE, 2, CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX);
     return 0;
 }
 SYS_INIT(p2sm_register_runtime_params, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE);
