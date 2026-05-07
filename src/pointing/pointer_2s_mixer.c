@@ -27,6 +27,87 @@
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static struct device *g_dev = NULL;
+
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+static uint32_t g_zrc_cache_last_refresh = 0;
+static bool     g_zrc_cache_initialized  = false;
+#endif
+
+/* pointer path */
+static bool     g_zrc_scroll_dis_ptr   = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER);
+static uint32_t g_zrc_ptr_after_scroll = (uint32_t) CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION;
+static uint32_t g_zrc_steady_thres     = (uint32_t) CONFIG_POINTER_2S_MIXER_STEADY_THRES;
+static bool     g_zrc_median_en        = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN);
+static uint8_t  g_zrc_median_w         = (uint8_t)  CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE;
+
+/* twist/scroll path */
+static bool     g_zrc_twist_global_en  = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN);
+static uint32_t g_zrc_twist_ttl        = (uint32_t) CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL;
+static bool     g_zrc_twist_hyst_en    = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN);
+static uint16_t g_zrc_twist_hyst_thres = (uint16_t) CONFIG_POINTER_2S_MIXER_TWIST_HYST_THRES;
+static uint16_t g_zrc_twist_thres      = (uint16_t) CONFIG_POINTER_2S_MIXER_TWIST_THRES;
+static uint16_t g_zrc_twist_hyst_mul   = (uint16_t) CONFIG_POINTER_2S_MIXER_TWIST_HYST_MUL;
+static uint16_t g_zrc_dy_mag_mul       = (uint16_t) CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL;
+static uint16_t g_zrc_twist_hyst_div   = (uint16_t) CONFIG_POINTER_2S_MIXER_TWIST_HYST_DIV;
+static uint16_t g_zrc_dy_mag_div       = (uint16_t) CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV;
+static uint8_t  g_zrc_ema_alpha        = (uint8_t)  CONFIG_POINTER_2S_MIXER_EMA_ALPHA;
+static uint32_t g_zrc_twist_deb        = (uint32_t) CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE;
+static uint32_t g_zrc_steady_cd        = (uint32_t) CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN;
+static bool     g_zrc_feedback_en      = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN);
+static uint16_t g_zrc_fb_thres         = (uint16_t) CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD;
+static uint32_t g_zrc_fb_max_cont      = (uint32_t) CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS;
+static int32_t  g_zrc_fb_cooldown      = (int32_t)  CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN;
+static uint32_t g_zrc_fb_dur           = (uint32_t) CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION;
+
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+#define ZRC_REFRESH_YIELD()                                          \
+    do {                                                             \
+        if (CONFIG_POINTER_2S_MIXER_ZRC_REFRESH_YIELD_US > 0) {      \
+            k_usleep(CONFIG_POINTER_2S_MIXER_ZRC_REFRESH_YIELD_US);  \
+        }                                                            \
+    } while (0)
+#endif
+
+// even though ZRC_GET is very cheap, it's not free.
+// local cache with polling helps to avoid thousands of reads per sec
+static void zrc_cache_refresh_if_due(const uint32_t now) {
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+    if (likely(g_zrc_cache_initialized) &&
+        (now - g_zrc_cache_last_refresh) < CONFIG_POINTER_2S_MIXER_ZRC_POLL_MS) {
+        return;
+    }
+
+    g_zrc_scroll_dis_ptr   = (bool)     ZRC_GET("p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER)); ZRC_REFRESH_YIELD();
+    g_zrc_ptr_after_scroll = (uint32_t) ZRC_GET("p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION); ZRC_REFRESH_YIELD();
+    g_zrc_steady_thres     = (uint32_t) ZRC_GET("p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES); ZRC_REFRESH_YIELD();
+    g_zrc_median_en        = (bool)     ZRC_GET("p2sm/median_en",        IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN)); ZRC_REFRESH_YIELD();
+    g_zrc_median_w         = (uint8_t)  ZRC_GET("p2sm/median_w",         CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE); ZRC_REFRESH_YIELD();
+
+    g_zrc_twist_global_en  = (bool)     ZRC_GET("p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN)); ZRC_REFRESH_YIELD();
+    g_zrc_twist_ttl        = (uint32_t) ZRC_GET("p2sm/twist_ttl",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL); ZRC_REFRESH_YIELD();
+    g_zrc_twist_hyst_en    = (bool)     ZRC_GET("p2sm/twist_hyst_en",    IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN)); ZRC_REFRESH_YIELD();
+    g_zrc_twist_hyst_thres = (uint16_t) ZRC_GET("p2sm/twist_hyst_thres", CONFIG_POINTER_2S_MIXER_TWIST_HYST_THRES); ZRC_REFRESH_YIELD();
+    g_zrc_twist_thres      = (uint16_t) ZRC_GET("p2sm/twist_thres",      CONFIG_POINTER_2S_MIXER_TWIST_THRES); ZRC_REFRESH_YIELD();
+    g_zrc_twist_hyst_mul   = (uint16_t) ZRC_GET("p2sm/twist_hyst_mul",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_MUL); ZRC_REFRESH_YIELD();
+    g_zrc_dy_mag_mul       = (uint16_t) ZRC_GET("p2sm/twist_dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL); ZRC_REFRESH_YIELD();
+    g_zrc_twist_hyst_div   = (uint16_t) ZRC_GET("p2sm/twist_hyst_div",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_DIV); ZRC_REFRESH_YIELD();
+    g_zrc_dy_mag_div       = (uint16_t) ZRC_GET("p2sm/twist_dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV); ZRC_REFRESH_YIELD();
+    g_zrc_ema_alpha        = (uint8_t)  ZRC_GET("p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA); ZRC_REFRESH_YIELD();
+    g_zrc_twist_deb        = (uint32_t) ZRC_GET("p2sm/twist_deb",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE); ZRC_REFRESH_YIELD();
+    g_zrc_steady_cd        = (uint32_t) ZRC_GET("p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN); ZRC_REFRESH_YIELD();
+    g_zrc_feedback_en      = (bool)     ZRC_GET("p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)); ZRC_REFRESH_YIELD();
+    g_zrc_fb_thres         = (uint16_t) ZRC_GET("p2sm/fb_thres",         CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD); ZRC_REFRESH_YIELD();
+    g_zrc_fb_max_cont      = (uint32_t) ZRC_GET("p2sm/fb_max_cont",      CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS); ZRC_REFRESH_YIELD();
+    g_zrc_fb_cooldown      = (int32_t)  ZRC_GET("p2sm/fb_cooldown",      CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN); ZRC_REFRESH_YIELD();
+    g_zrc_fb_dur           = (uint32_t) ZRC_GET("p2sm/fb_dur",           CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION);
+
+    g_zrc_cache_last_refresh = now;
+    g_zrc_cache_initialized  = true;
+#else
+    ARG_UNUSED(now);
+#endif
+}
+
 static void twist_filter_cleanup_work_cb(struct k_work *work);
 
 static void twist_feedback_off_work_cb(struct k_work *work);
@@ -43,7 +124,7 @@ struct zip_pointer_2s_mixer_config {
     const uint32_t sync_report_ms, sync_scroll_report_ms;
 
     // CPI and sync window dependent
-    const uint16_t twist_thres, twist_interference_thres, twist_interference_window;
+    const uint16_t twist_interference_thres, twist_interference_window;
 
     // zero (origin) = down left bottom, not the ball center
     const uint8_t sensor1_pos[3], sensor2_pos[3];
@@ -53,7 +134,7 @@ struct zip_pointer_2s_mixer_config {
     // ToDo refactor to accept any behavior
     const struct gpio_dt_spec feedback_gpios;
     const struct gpio_dt_spec feedback_extra_gpios;
-    const uint16_t twist_feedback_duration, twist_feedback_threshold, twist_feedback_delay;
+    const uint16_t twist_feedback_delay;
 };
 
 struct p2sm_dataframe {
@@ -118,8 +199,7 @@ static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
 
-static int16_t apply_median(int16_t *buf, uint8_t *head, uint8_t *count,
-                            uint8_t window, const int16_t sample) {
+static int16_t apply_median(int16_t *buf, uint8_t *head, uint8_t *count, uint8_t window, const int16_t sample) {
     if (window < 2) {
         return sample;
     }
@@ -216,8 +296,7 @@ static int process_and_report(const struct device *dev) {
         dt = 0;
     }
 
-    if (ZRC_GET("p2sm/scroll_dis_ptr", CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER) &&
-        now - data->last_rpt_time_twist < (uint32_t)ZRC_GET("p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION)) {
+    if (g_zrc_scroll_dis_ptr && now - data->last_rpt_time_twist < g_zrc_ptr_after_scroll) {
         data->last_rpt_time = now;
         data->rpt_x_remainder = 0;
         data->rpt_y_remainder = 0;
@@ -243,12 +322,11 @@ static int process_and_report(const struct device *dev) {
     const bool have_x = data->rpt_x != 0;
     const bool have_y = data->rpt_y != 0;
     if (have_x || have_y) {
-        const int32_t steady_thres = ZRC_GET("p2sm/steady_thres", CONFIG_POINTER_2S_MIXER_STEADY_THRES);
+        const int32_t steady_thres = (int32_t) g_zrc_steady_thres;
         if (abs(data->rpt_x) > steady_thres || abs(data->rpt_y) > steady_thres) {
             data->last_sig_move = now;
         }
 
-        // LOG_INF("fx = %d, fy = %d", data->rpt_x, data->rpt_y);
         if (have_x) {
             input_report(dev, INPUT_EV_REL, INPUT_REL_X, data->rpt_x, !have_y, K_NO_WAIT);
             data->rpt_x = 0;
@@ -329,15 +407,23 @@ static float calculate_twist(const struct device *dev) {
         return 0;
     }
 
-    if (abs(s1_y) < config->twist_thres || abs(s2_y) < config->twist_thres) {
+    const uint32_t filter_ttl = g_zrc_twist_ttl;
+    const bool hyst_en = g_zrc_twist_hyst_en;
+    const bool hyst_active = hyst_en && passed < filter_ttl;
+    const uint16_t eff_thres = hyst_active ? g_zrc_twist_hyst_thres : g_zrc_twist_thres;
+    const uint16_t eff_mul   = hyst_active ? g_zrc_twist_hyst_mul   : g_zrc_dy_mag_mul;
+    const uint16_t eff_div   = hyst_active ? g_zrc_twist_hyst_div   : g_zrc_dy_mag_div;
+
+    if (abs(s1_y) < eff_thres || abs(s2_y) < eff_thres) {
         LOG_DBG("Discarded movement (reason = twist_thres)");
         return 0;
     }
 
-    const uint8_t translation_allowed = config->twist_interference_thres * CONFIG_POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL;
-    if (abs(s1_x+ s2_x) > translation_allowed || abs(s1_y + s2_y) > translation_allowed) {
-        LOG_DBG("Discarded movement (reason = significant_translation)");
-        return 0;
+    if (config->twist_interference_thres != 0) {
+        if (abs(s1_x+ s2_x) > config->twist_interference_thres || abs(s1_y + s2_y) > config->twist_interference_thres) {
+            LOG_DBG("Discarded movement (reason = significant_translation)");
+            return 0;
+        }
     }
 
     const bool direction = s1_y < s2_y;
@@ -359,49 +445,46 @@ static float calculate_twist(const struct device *dev) {
         data->ema_delta_y = delta_y;
         data->ema_initialized = true;
     } else {
-        const float alpha = (float) ZRC_GET("p2sm/ema_alpha", CONFIG_POINTER_2S_MIXER_EMA_ALPHA) / 100.0f;
+        const float alpha = (float) g_zrc_ema_alpha / 100.0f;
         data->ema_translation = alpha * translation + (1.0f - alpha) * data->ema_translation;
         data->ema_delta_y = alpha * delta_y + (1.0f - alpha) * data->ema_delta_y;
     }
 
     const uint16_t avg_translation = (uint16_t) data->ema_translation;
     const uint16_t avg_delta_y = (uint16_t) data->ema_delta_y;
-    const uint16_t max_mag = avg_translation * ZRC_GET("p2sm/dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL) / ZRC_GET("p2sm/dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV);
-    const float result = ((avg_delta_y - config->twist_thres) > max_mag ? avg_delta_y - avg_translation : 0) * (s1_y > s2_y ? -1 : 1);
+    const uint16_t max_mag = avg_translation * eff_mul / eff_div;
+    const float result = ((avg_delta_y - eff_thres) > max_mag ? avg_delta_y - avg_translation : 0) * (s1_y > s2_y ? -1 : 1);
     const int int_result = abs((int) result);
 
-    // LOG_INF("timestamp: %d, twist data: delta_y=%d, translation=%d", (int) now, avg_delta_y, avg_translation);
-
-    if (avg_translation > translation_allowed) {
+    if (config->twist_interference_thres != 0 && avg_translation > config->twist_interference_thres) {
         LOG_DBG("Discarded twist (reason = significant_translation)");
         data->ema_initialized = false;
         return 0;
     }
 
-    if (int_result < config->twist_thres || int_result > CONFIG_POINTER_2S_MIXER_TWIST_MAX_VALUE) {
-        LOG_DBG("Discarded twist (reason = twist_thres)");
+    if (int_result == 0) {
         return 0;
     }
 
-    if (avg_translation > config->twist_interference_thres) {
+    if (config->twist_interference_thres > 0 && avg_translation > config->twist_interference_thres) {
         LOG_DBG("Discarded twist (reason = interference)");
         return 0;
     }
 
-    if (now - data->debounce_start < CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE) {
+    if (now - data->debounce_start < g_zrc_twist_deb) {
         LOG_DBG("Discarded twist (reason = debounce)");
         data->last_twist = now;
         return 0;
     }
 
-    if (passed > CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL) {
+    if (passed > filter_ttl) {
         LOG_DBG("Discarded twist (reason = time_filter)");
         data->debounce_start = now;
         data->last_twist = now;
         return 0;
     }
 
-    if (data->last_sig_move - now < (uint32_t)ZRC_GET("p2sm/steady_cd", CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN)) {
+    if (data->last_sig_move - now < g_zrc_steady_cd) {
         LOG_DBG("Discarded twist (reason = steady_cooldown)");
         data->debounce_start = now;
         data->last_twist = now;
@@ -411,8 +494,7 @@ static float calculate_twist(const struct device *dev) {
     data->last_twist = now;
     data->last_twist_direction = direction;
 
-    if (IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN) ||
-        ZRC_GET("p2sm/feedback_en", CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)) {
+    if (IS_ENABLED(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_EN) || g_zrc_feedback_en) {
         k_work_reschedule(&data->twist_filter_cleanup_work, K_MSEC(CONFIG_POINTER_2S_MIXER_DIRECTION_FILTER_TTL));
     }
 
@@ -433,6 +515,12 @@ static void twist_filter_cleanup_work_cb(struct k_work *work) {
 #endif
 
     LOG_DBG("Direction filter data discarded (timeout)");
+}
+
+static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]);
+
+static int sensor_surface_pos(const float radius, const uint8_t pos[3], float out[3]) {
+    return line_sphere_intersection(radius, (float) pos[0] - 127.f, (float) pos[1] - 127.f, (float) pos[2] - 127.f, out);
 }
 
 static int line_sphere_intersection(const float r, const float x, const float y, const float z, float intersection[3]) {
@@ -476,16 +564,14 @@ static void on_sensor_event(struct zip_pointer_2s_mixer_data *data, const uint8_
     *fx = 0;
     *fy = 0;
 
-    if (ZRC_GET("p2sm/median_en", IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN))) {
-        const uint8_t window = (uint8_t) ZRC_GET("p2sm/median_w", CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE);
+    if (g_zrc_median_en) {
+        const uint8_t window = g_zrc_median_w;
         dx = apply_median(data->median_buf[hb],     &data->median_head[hb],     &data->median_count[hb],     window, dx);
         dy = apply_median(data->median_buf[hb + 1], &data->median_head[hb + 1], &data->median_count[hb + 1], window, dy);
     }
 
     float rx, ry;
     apply_rotation(matrix, (float) dx, (float) dy, &rx, &ry);
-    // LOG_INF("rx%d = %d, ry%d = %d", s+1, (int) rx, s+1, (int) ry);
-
     data->rotated_x[s] += rx;
     data->rotated_y[s] += ry;
     *synced = true;
@@ -504,6 +590,8 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             return -1;
         }
     }
+
+    zrc_cache_refresh_if_due(now);
 
     if (p1 & INPUT_MIXER_SENSOR1) {
         on_sensor_event(data, 0, event, frame_end, now);
@@ -532,7 +620,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
         process_and_report(dev);
     }
 
-    const bool global_enabled = ZRC_GET("p2sm/twist_global_en", IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN));
+    const bool global_enabled = g_zrc_twist_global_en;
     if (data->twist_enabled && global_enabled && now - data->last_rpt_time_twist > config->sync_scroll_report_ms) {
         const float twist_float = calculate_twist(dev) * data->twist_coef;
         if (now - data->last_twist > CONFIG_POINTER_2S_MIXER_TWIST_REMAINDER_TTL) {
@@ -547,13 +635,14 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
             data->rpt_twist_remainder -= twist_int;
             input_report(dev, INPUT_EV_REL, INPUT_REL_WHEEL, data->twist_reversed ? -twist_int : twist_int, true, K_NO_WAIT);
 
-            if (ZRC_GET("p2sm/feedback_en", CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)) {
+            if (g_zrc_feedback_en) {
                 data->twist_accumulator += abs(twist_int);
 
                 const bool direction = twist_float > 0;
+                const uint16_t fb_thres = g_zrc_fb_thres;
                 if (config->feedback_gpios.port != NULL &&
-                    (data->twist_accumulator >= config->twist_feedback_threshold || data->twist_feedback_direction != direction) &&
-                    config->twist_feedback_threshold > 0) {
+                    (data->twist_accumulator >= fb_thres || data->twist_feedback_direction != direction) &&
+                    fb_thres > 0) {
                     data->twist_accumulator = 0;
 
                     if (data->feedback_is_in_cooldown && now < data->feedback_cooldown_until) {
@@ -562,7 +651,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
                         return 0;
                     }
 
-                    if (data->feedback_start_time > 0 && (now - data->feedback_start_time) >= (uint32_t)ZRC_GET("p2sm/fb_max_cont", CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS)) {
+                    if (data->feedback_start_time > 0 && (now - data->feedback_start_time) >= g_zrc_fb_max_cont) {
                         k_work_cancel_delayable(&data->twist_feedback_off_work);
                         k_work_cancel_delayable(&data->twist_feedback_extra_delay_work);
 
@@ -573,11 +662,10 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
 
                         data->feedback_start_time = 0;
                         data->feedback_is_in_cooldown = true;
-                        const int32_t fb_cooldown = ZRC_GET("p2sm/fb_cooldown", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
-                        data->feedback_cooldown_until = now + fb_cooldown;
-                        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(fb_cooldown));
+                        data->feedback_cooldown_until = now + g_zrc_fb_cooldown;
+                        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(g_zrc_fb_cooldown));
 
-                        LOG_DBG("Twist feedback forced off after max continuous duration, cooldown for %d ms", fb_cooldown);
+                        LOG_DBG("Twist feedback forced off after max continuous duration, cooldown for %d ms", g_zrc_fb_cooldown);
                         data->twist_feedback_direction = direction;
                         return 0;
                     }
@@ -634,20 +722,12 @@ static int data_init(const struct device *dev) {
         return 0;
     }
 
-    if (!line_sphere_intersection(radius,
-        (float) *(uint8_t*)(config->sensor1_pos + 0) - 127.f,
-        (float) *(uint8_t*)(config->sensor1_pos + 1) - 127.f,
-        (float) *(uint8_t*)(config->sensor1_pos + 2) - 127.f,
-        surface_p1)) {
+    if (!sensor_surface_pos(radius, config->sensor1_pos, surface_p1)) {
         LOG_ERR("Failed to get surface position for sensor 1!");
         return 0;
     }
 
-    if (!line_sphere_intersection(radius,
-        (float) *(uint8_t*)(config->sensor2_pos + 0) - 127.f,
-        (float) *(uint8_t*)(config->sensor2_pos + 1) - 127.f,
-        (float) *(uint8_t*)(config->sensor2_pos + 2) - 127.f,
-        surface_p2)) {
+    if (!sensor_surface_pos(radius, config->sensor2_pos, surface_p2)) {
         LOG_ERR("Failed to get surface position for sensor 2!");
         return 0;
     }
@@ -757,10 +837,8 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     const uint32_t now = (uint32_t) k_uptime_get();
     const uint32_t elapsed = data->feedback_start_time > 0 ? now - data->feedback_start_time : 0;
-    const int32_t fb_max_cont = ZRC_GET("p2sm/fb_max_cont", CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS);
-    const uint32_t remaining_duration = (uint32_t)fb_max_cont > elapsed ? (uint32_t)fb_max_cont - elapsed : 0;
-    const uint32_t feedback_duration = config->twist_feedback_duration < remaining_duration
-        ? config->twist_feedback_duration : remaining_duration;
+    const uint32_t remaining_duration = g_zrc_fb_max_cont > elapsed ? g_zrc_fb_max_cont - elapsed : 0;
+    const uint32_t feedback_duration = g_zrc_fb_dur < remaining_duration ? g_zrc_fb_dur : remaining_duration;
 
     if (feedback_duration > 0) {
         gpio_pin_set_dt(&config->feedback_gpios, 1);
@@ -772,10 +850,9 @@ static void twist_feedback_extra_delay_work_cb(struct k_work *work) {
         gpio_pin_set_dt(&config->feedback_gpios, 0);
         data->feedback_start_time = 0;
         data->feedback_is_in_cooldown = true;
-        const int32_t fb_cooldown = ZRC_GET("p2sm/fb_cooldown", CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN);
-        data->feedback_cooldown_until = now + fb_cooldown;
-        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(fb_cooldown));
-        LOG_DBG("Twist feedback after delay immediately off, max duration reached, cooldown for %d ms", fb_cooldown);
+        data->feedback_cooldown_until = now + g_zrc_fb_cooldown;
+        k_work_reschedule(&data->twist_feedback_cooldown_work, K_MSEC(g_zrc_fb_cooldown));
+        LOG_DBG("Twist feedback after delay immediately off, max duration reached, cooldown for %d ms", g_zrc_fb_cooldown);
     }
 }
 
@@ -832,157 +909,98 @@ static void p2sm_save_config() {
 }
 #endif
 
-float p2sm_get_move_coef() {
+static __attribute__((noinline)) struct zip_pointer_2s_mixer_data *p2sm_data(void) {
     if (g_dev == NULL) {
         LOG_ERR("Device not initialized!");
-        return 0;
+        return NULL;
     }
+    return g_dev->data;
+}
 
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->move_coef;
+#if IS_ENABLED(CONFIG_SETTINGS)
+#define P2SM_PERSIST() p2sm_save_config()
+#else
+#define P2SM_PERSIST() ((void)0)
+#endif
+
+float p2sm_get_move_coef() {
+    const struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    return data ? data->move_coef : 0;
 }
 
 float p2sm_get_twist_coef() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return 0;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->twist_coef;
+    const struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    return data ? data->twist_coef : 0;
 }
 
 void p2sm_set_move_coef(const float coef) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->move_coef = coef;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
+    P2SM_PERSIST();
 }
 
 void p2sm_set_twist_coef(const float coef) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->twist_coef = coef;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
+    P2SM_PERSIST();
 }
 
 bool p2sm_twist_enabled() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return false;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->twist_enabled;
+    const struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    return data ? data->twist_enabled : false;
 }
 
 bool p2sm_twist_is_reversed() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return false;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->twist_reversed;
+    const struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    return data ? data->twist_reversed : false;
 }
 
 void p2sm_toggle_twist_reverse() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->twist_reversed = !data->twist_reversed;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
+    P2SM_PERSIST();
 }
 
 static void p2sm_toggle_twist_set_reversed(const bool reversed) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->twist_reversed = reversed;
 }
 
 void p2sm_toggle_twist() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->twist_enabled = !data->twist_enabled;
 }
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
 bool p2sm_sma_enabled() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return false;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->sma_enabled;
+    const struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    return data ? data->sma_enabled : false;
 }
 
 void p2sm_set_sma_enabled(const bool enabled) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->sma_enabled = enabled;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
+    P2SM_PERSIST();
 }
 
 uint8_t p2sm_get_sma_window() {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return 0;
-    }
-
-    const struct zip_pointer_2s_mixer_data *data = g_dev->data;
-    return data->sma_window_size;
+    const struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    return data ? data->sma_window_size : 0;
 }
 
 void p2sm_set_sma_window(const uint8_t window_size) {
-    if (g_dev == NULL) {
-        LOG_ERR("Device not initialized!");
-        return;
-    }
-
-    struct zip_pointer_2s_mixer_data *data = g_dev->data;
+    struct zip_pointer_2s_mixer_data *data = p2sm_data();
+    if (!data) return;
     data->sma_window_size = window_size;
     data->sma_head_index = 0;
     data->sma_count = 0;
-
-#if IS_ENABLED(CONFIG_SETTINGS)
-    p2sm_save_config();
-#endif
+    P2SM_PERSIST();
 }
 #endif
 
@@ -1059,19 +1077,28 @@ SETTINGS_STATIC_HANDLER_DEFINE(p2sm_settings, P2SM_SETTINGS_PREFIX, NULL, p2sm_s
 
 #if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
 static int p2sm_register_runtime_params(void) {
-    zrc_register("p2sm/ema_alpha",       CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50);
-    zrc_register("p2sm/feedback_en",     IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1);
+    zrc_register("p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50);
+    zrc_register("p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1);
     zrc_register("p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1);
-    zrc_register("p2sm/scroll_dis_ptr",  CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER, 0, 1);
-    zrc_register("p2sm/ptr_after_scroll",CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000);
-    zrc_register("p2sm/dy_mag_mul",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100);
-    zrc_register("p2sm/dy_mag_div",      CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100);
-    zrc_register("p2sm/fb_max_cont",     CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 5000);
-    zrc_register("p2sm/fb_cooldown",     CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000);
-    zrc_register("p2sm/steady_thres",    CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255);
-    zrc_register("p2sm/steady_cd",       CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000);
-    zrc_register("p2sm/median_en",       IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN), 0, 1);
-    zrc_register("p2sm/median_w",        CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE, 2, CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX);
+    zrc_register("p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER), 0, 1);
+    zrc_register("p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000);
+    zrc_register("p2sm/twist_dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100);
+    zrc_register("p2sm/twist_dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100);
+    zrc_register("p2sm/twist_hyst_en",    IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN), 0, 1);
+    zrc_register("p2sm/twist_hyst_thres", CONFIG_POINTER_2S_MIXER_TWIST_HYST_THRES, 1, 100);
+    zrc_register("p2sm/twist_hyst_mul",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_MUL, 1, 100);
+    zrc_register("p2sm/twist_hyst_div",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_DIV, 1, 100);
+    zrc_register("p2sm/twist_thres",      CONFIG_POINTER_2S_MIXER_TWIST_THRES, 1, 100);
+    zrc_register("p2sm/twist_ttl",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL, 0, 5000);
+    zrc_register("p2sm/twist_deb",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE, 0, 5000);
+    zrc_register("p2sm/fb_max_cont",      CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 5000);
+    zrc_register("p2sm/fb_cooldown",      CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000);
+    zrc_register("p2sm/fb_thres",         CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD, 0, 5000);
+    zrc_register("p2sm/fb_dur",           CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION, 0, 5000);
+    zrc_register("p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255);
+    zrc_register("p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000);
+    zrc_register("p2sm/median_en",        IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN), 0, 1);
+    zrc_register("p2sm/median_w",         CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE, 2, CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX);
     return 0;
 }
 SYS_INIT(p2sm_register_runtime_params, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE);
@@ -1083,14 +1110,11 @@ static struct zip_pointer_2s_mixer_config config = {
     .sync_scroll_report_ms = DT_INST_PROP(0, sync_scroll_report_ms),
     .twist_interference_thres = DT_INST_PROP(0, twist_interference_thres),
     .twist_interference_window = DT_INST_PROP_OR(0, twist_interference_window, 0),
-    .twist_thres = DT_INST_PROP(0, twist_thres),
     .sensor1_pos = DT_INST_PROP(0, sensor1_pos),
     .sensor2_pos = DT_INST_PROP(0, sensor2_pos),
     .ball_radius = DT_INST_PROP(0, ball_radius),
     .feedback_gpios = GPIO_DT_SPEC_INST_GET_OR(0, feedback_gpios, { .port = NULL }),
     .feedback_extra_gpios = GPIO_DT_SPEC_INST_GET_OR(0, feedback_extra_gpios, { .port = NULL }),
-    .twist_feedback_duration = DT_INST_PROP_OR(0, twist_feedback_duration, 0),
-    .twist_feedback_threshold = DT_INST_PROP_OR(0, twist_feedback_threshold, 0),
     .twist_feedback_delay = DT_INST_PROP_OR(0, twist_feedback_delay, 0),
 };
 DEVICE_DT_INST_DEFINE(0, &sy_init, NULL, &data, &config, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &sy_driver_api);

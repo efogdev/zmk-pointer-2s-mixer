@@ -12,23 +12,14 @@ properties:
     required: true
     default: 8
 
-  # CPI and sync-scroll-report-ms dependent!
-  # Smaller value = less wiggle allowed
   twist-interference-thres:
     type: int
-    required: true
     default: 200
+    deprecated: true
   twist-interference-window:
     type: int
     default: 100
     deprecated: true
-
-  # CPI and sync-scroll-report-ms dependent!
-  # Filters out twist movements smaller than N points
-  twist-thres:
-    type: int
-    required: true
-    default: 4
 
   # Zero = down left bottom (NOT BALL CENTER)
   sensor1-pos:
@@ -48,12 +39,6 @@ properties:
     type: phandle-array
   feedback-extra-gpios:
     type: phandle-array
-  twist-feedback-threshold:
-    type: int
-    default: 100
-  twist-feedback-duration:
-    type: int
-    default: 0
   twist-feedback-delay:
     type: int
     default: 5

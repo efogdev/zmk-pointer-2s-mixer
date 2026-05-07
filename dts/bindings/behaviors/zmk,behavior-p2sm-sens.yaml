@@ -31,10 +31,6 @@ properties:
   feedback-on-limit:
     type: boolean
 
-  feedback-gpios:
-    type: phandle-array
-  feedback-extra-gpios:
-    type: phandle-array
   feedback-wrap-pattern:
     type: array
   feedback-duration:

@@ -31,6 +31,26 @@ config POINTER_2S_MIXER_REMAINDER_TTL
   int "X/Y remainder TTL, msec"
   default 16
 
+config POINTER_2S_MIXER_ZRC_POLL_MS
+  int "ZRC cache refresh interval, msec"
+  default 500
+  help
+    How often the hot path re-reads runtime-config values for both
+    pointer and twist/scroll paths. The check runs inline on each
+    sensor event, so polling happens only while the device is
+    active. Larger values reduce ZRC lookup overhead at the cost of
+    slower response when settings change. No effect when
+    ZMK_RUNTIME_CONFIG is disabled.
+
+config POINTER_2S_MIXER_ZRC_REFRESH_YIELD_US
+  int "Yield between ZRC refresh reads, usec"
+  default 10
+  help
+    Inserts a short k_usleep() between each read inside a cache
+    refresh sweep so the back-to-back lookups don't starve other
+    work on the input thread. Set to 0 to disable yielding (single
+    burst).
+
 config POINTER_2S_MIXER_TWIST_EN
   bool "Enable twist to scroll"
   default y
@@ -81,17 +101,45 @@ config POINTER_2S_MIXER_TWIST_MAX_VALUE
   int "Maximum reasonable value for twist"
   default 750
 
-config POINTER_2S_MIXER_SIGNIFICANT_MOVEMENT_MUL
-  int "Significant translation multiplier"
-  default 3
-
 config POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL
   int "Delta Y over translation mangitude multiplier"
-  default 5
+  default 8
 
 config POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV
   int "Delta Y over translation mangitude divisor"
   default 3
+
+config POINTER_2S_MIXER_TWIST_HYST_EN
+  bool "Twist threshold hysteresis"
+  default y
+  help
+    Relax twist_thres and dy_mag_mul/div while a twist gesture is active
+    (within TWIST_FILTER_TTL of last twist-relevant event). Lets slow
+    continuation through without weakening start-of-gesture protection.
+
+config POINTER_2S_MIXER_TWIST_HYST_THRES
+  int "Active-twist threshold"
+  default 1
+
+config POINTER_2S_MIXER_TWIST_HYST_MUL
+  int "Active-twist dy_mag multiplier"
+  default 1
+
+config POINTER_2S_MIXER_TWIST_HYST_DIV
+  int "Active-twist dy_mag divisor"
+  default 1
+
+config POINTER_2S_MIXER_TWIST_THRES
+  int "Twist threshold"
+  default 4
+
+config POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD
+  int "Twist feedback accumulator threshold"
+  default 100
+
+config POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION
+  int "Twist feedback pulse duration, msec"
+  default 0
 
 config POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS
   int "Maximum continuous feedback duration, msec"
