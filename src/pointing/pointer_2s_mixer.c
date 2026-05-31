@@ -37,8 +37,6 @@ static bool     g_zrc_cache_initialized  = false;
 static bool     g_zrc_scroll_dis_ptr   = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER);
 static uint32_t g_zrc_ptr_after_scroll = (uint32_t) CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION;
 static uint32_t g_zrc_steady_thres     = (uint32_t) CONFIG_POINTER_2S_MIXER_STEADY_THRES;
-static bool     g_zrc_median_en        = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN);
-static uint8_t  g_zrc_median_w         = (uint8_t)  CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE;
 
 /* twist/scroll path */
 static bool     g_zrc_twist_global_en  = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN);
@@ -68,38 +66,52 @@ static uint32_t g_zrc_fb_dur           = (uint32_t) CONFIG_POINTER_2S_MIXER_TWIS
     } while (0)
 #endif
 
+#if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+static const struct zrc_cache_entry {
+    const char *key;
+    void *dst;
+    uint8_t size;
+} zrc_cache_tbl[] = {
+    { "p2sm/scroll_dis_ptr",   &g_zrc_scroll_dis_ptr,   sizeof(g_zrc_scroll_dis_ptr)   },
+    { "p2sm/ptr_after_scroll", &g_zrc_ptr_after_scroll, sizeof(g_zrc_ptr_after_scroll) },
+    { "p2sm/steady_thres",     &g_zrc_steady_thres,     sizeof(g_zrc_steady_thres)     },
+    { "p2sm/twist_global_en",  &g_zrc_twist_global_en,  sizeof(g_zrc_twist_global_en)  },
+    { "p2sm/twist_ttl",        &g_zrc_twist_ttl,        sizeof(g_zrc_twist_ttl)        },
+    { "p2sm/twist_hyst_en",    &g_zrc_twist_hyst_en,    sizeof(g_zrc_twist_hyst_en)    },
+    { "p2sm/twist_hyst_thres", &g_zrc_twist_hyst_thres, sizeof(g_zrc_twist_hyst_thres) },
+    { "p2sm/twist_thres",      &g_zrc_twist_thres,      sizeof(g_zrc_twist_thres)      },
+    { "p2sm/twist_hyst_mul",   &g_zrc_twist_hyst_mul,   sizeof(g_zrc_twist_hyst_mul)   },
+    { "p2sm/twist_dy_mag_mul", &g_zrc_dy_mag_mul,       sizeof(g_zrc_dy_mag_mul)       },
+    { "p2sm/twist_hyst_div",   &g_zrc_twist_hyst_div,   sizeof(g_zrc_twist_hyst_div)   },
+    { "p2sm/twist_dy_mag_div", &g_zrc_dy_mag_div,       sizeof(g_zrc_dy_mag_div)       },
+    { "p2sm/ema_alpha",        &g_zrc_ema_alpha,        sizeof(g_zrc_ema_alpha)        },
+    { "p2sm/twist_deb",        &g_zrc_twist_deb,        sizeof(g_zrc_twist_deb)        },
+    { "p2sm/steady_cd",        &g_zrc_steady_cd,        sizeof(g_zrc_steady_cd)        },
+    { "p2sm/feedback_en",      &g_zrc_feedback_en,      sizeof(g_zrc_feedback_en)      },
+    { "p2sm/fb_thres",         &g_zrc_fb_thres,         sizeof(g_zrc_fb_thres)         },
+    { "p2sm/fb_max_cont",      &g_zrc_fb_max_cont,      sizeof(g_zrc_fb_max_cont)      },
+    { "p2sm/fb_cooldown",      &g_zrc_fb_cooldown,      sizeof(g_zrc_fb_cooldown)      },
+    { "p2sm/fb_dur",           &g_zrc_fb_dur,           sizeof(g_zrc_fb_dur)           },
+};
+#endif
+
 // even though ZRC_GET is very cheap, it's not free.
 // local cache with polling helps to avoid thousands of reads per sec
-static void zrc_cache_refresh_if_due(const uint32_t now) {
+static __attribute__((noinline)) void zrc_cache_refresh_if_due(const uint32_t now) {
 #if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
     if (likely(g_zrc_cache_initialized) &&
         (now - g_zrc_cache_last_refresh) < CONFIG_POINTER_2S_MIXER_ZRC_POLL_MS) {
         return;
     }
 
-    g_zrc_scroll_dis_ptr   = (bool)     ZRC_GET("p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER)); ZRC_REFRESH_YIELD();
-    g_zrc_ptr_after_scroll = (uint32_t) ZRC_GET("p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION); ZRC_REFRESH_YIELD();
-    g_zrc_steady_thres     = (uint32_t) ZRC_GET("p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES); ZRC_REFRESH_YIELD();
-    g_zrc_median_en        = (bool)     ZRC_GET("p2sm/median_en",        IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN)); ZRC_REFRESH_YIELD();
-    g_zrc_median_w         = (uint8_t)  ZRC_GET("p2sm/median_w",         CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE); ZRC_REFRESH_YIELD();
-
-    g_zrc_twist_global_en  = (bool)     ZRC_GET("p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN)); ZRC_REFRESH_YIELD();
-    g_zrc_twist_ttl        = (uint32_t) ZRC_GET("p2sm/twist_ttl",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL); ZRC_REFRESH_YIELD();
-    g_zrc_twist_hyst_en    = (bool)     ZRC_GET("p2sm/twist_hyst_en",    IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN)); ZRC_REFRESH_YIELD();
-    g_zrc_twist_hyst_thres = (uint16_t) ZRC_GET("p2sm/twist_hyst_thres", CONFIG_POINTER_2S_MIXER_TWIST_HYST_THRES); ZRC_REFRESH_YIELD();
-    g_zrc_twist_thres      = (uint16_t) ZRC_GET("p2sm/twist_thres",      CONFIG_POINTER_2S_MIXER_TWIST_THRES); ZRC_REFRESH_YIELD();
-    g_zrc_twist_hyst_mul   = (uint16_t) ZRC_GET("p2sm/twist_hyst_mul",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_MUL); ZRC_REFRESH_YIELD();
-    g_zrc_dy_mag_mul       = (uint16_t) ZRC_GET("p2sm/twist_dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL); ZRC_REFRESH_YIELD();
-    g_zrc_twist_hyst_div   = (uint16_t) ZRC_GET("p2sm/twist_hyst_div",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_DIV); ZRC_REFRESH_YIELD();
-    g_zrc_dy_mag_div       = (uint16_t) ZRC_GET("p2sm/twist_dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV); ZRC_REFRESH_YIELD();
-    g_zrc_ema_alpha        = (uint8_t)  ZRC_GET("p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA); ZRC_REFRESH_YIELD();
-    g_zrc_twist_deb        = (uint32_t) ZRC_GET("p2sm/twist_deb",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE); ZRC_REFRESH_YIELD();
-    g_zrc_steady_cd        = (uint32_t) ZRC_GET("p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN); ZRC_REFRESH_YIELD();
-    g_zrc_feedback_en      = (bool)     ZRC_GET("p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN)); ZRC_REFRESH_YIELD();
-    g_zrc_fb_thres         = (uint16_t) ZRC_GET("p2sm/fb_thres",         CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD); ZRC_REFRESH_YIELD();
-    g_zrc_fb_max_cont      = (uint32_t) ZRC_GET("p2sm/fb_max_cont",      CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS); ZRC_REFRESH_YIELD();
-    g_zrc_fb_cooldown      = (int32_t)  ZRC_GET("p2sm/fb_cooldown",      CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN); ZRC_REFRESH_YIELD();
-    g_zrc_fb_dur           = (uint32_t) ZRC_GET("p2sm/fb_dur",           CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION);
+    for (size_t i = 0; i < ARRAY_SIZE(zrc_cache_tbl); i++) {
+        const struct zrc_cache_entry *e = &zrc_cache_tbl[i];
+        const int32_t v = zrc_get(e->key);
+        memcpy(e->dst, &v, e->size);
+        if (i + 1 < ARRAY_SIZE(zrc_cache_tbl)) {
+            ZRC_REFRESH_YIELD();
+        }
+    }
 
     g_zrc_cache_last_refresh = now;
     g_zrc_cache_initialized  = true;
@@ -182,59 +194,31 @@ struct zip_pointer_2s_mixer_data {
     uint32_t feedback_cooldown_until;
     bool feedback_is_in_cooldown;
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    float sma_buffer[CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX][2];
+    float (*sma_buffer)[2];
     uint8_t sma_head_index;
     uint8_t sma_count;
     uint8_t sma_window_size;
     uint32_t last_sma_time;
-#endif
-
-    int16_t median_buf[4][CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX];
-    uint8_t median_head[4];
-    uint8_t median_count[4];
 };
 
 static int data_init(const struct device *dev);
 static void apply_rotation(float matrix[3][3], float dx, float dy, float *out_x, float *out_y);
 static void apply_coef(float coef, float *x, float *y);
 
-static int16_t apply_median(int16_t *buf, uint8_t *head, uint8_t *count, uint8_t window, const int16_t sample) {
-    if (window < 2) {
-        return sample;
-    }
-    if (window > CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX) {
-        window = CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX;
-    }
-
-    buf[*head] = sample;
-    *head = (uint8_t) ((*head + 1) % window);
-    if (*count < window) {
-        (*count)++;
-    }
-
-    if (*count < window) {
-        return sample;
-    }
-
-    int16_t sorted[CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX];
-    memcpy(sorted, buf, window * sizeof(int16_t));
-    for (uint8_t i = 1; i < window; i++) {
-        const int16_t v = sorted[i];
-        int j = i;
-        while (j > 0 && sorted[j - 1] > v) {
-            sorted[j] = sorted[j - 1];
-            j--;
-        }
-        sorted[j] = v;
-    }
-    return sorted[window / 2];
-}
-
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
 static void apply_sma(struct zip_pointer_2s_mixer_data *data, float *x, float *y) {
     if (data == NULL || x == NULL || y == NULL || data->sma_window_size < 2) {
         return;
+    }
+
+    if (data->sma_buffer == NULL) {
+        data->sma_buffer = malloc(CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX * sizeof(*data->sma_buffer));
+        if (data->sma_buffer == NULL) {
+            LOG_ERR("SMA buffer allocation failed");
+            return;
+        }
+        memset(data->sma_buffer, 0, CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX * sizeof(*data->sma_buffer));
+        data->sma_head_index = 0;
+        data->sma_count = 0;
     }
 
     const uint32_t now = (uint32_t) k_uptime_get();
@@ -263,7 +247,6 @@ static void apply_sma(struct zip_pointer_2s_mixer_data *data, float *x, float *y
         *y = sum_y / (float) data->sma_window_size;
     }
 }
-#endif
 
 static int process_and_report(const struct device *dev) {
     struct zip_pointer_2s_mixer_data *data = dev->data;
@@ -308,13 +291,11 @@ static int process_and_report(const struct device *dev) {
     data->rpt_x = (int16_t) data->rpt_x_remainder;
     data->rpt_y = (int16_t) data->rpt_y_remainder;
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
     if (data->sma_enabled && (data->rpt_x || data->rpt_y)) {
         apply_sma(data, &data->rpt_x_remainder, &data->rpt_y_remainder);
         data->rpt_x = (int16_t) data->rpt_x_remainder;
         data->rpt_y = (int16_t) data->rpt_y_remainder;
     }
-#endif
 
     data->rpt_x_remainder -= data->rpt_x;
     data->rpt_y_remainder -= data->rpt_y;
@@ -542,7 +523,6 @@ static void on_sensor_event(struct zip_pointer_2s_mixer_data *data, const uint8_
     int16_t *fy = (s == 0) ? &data->frame.s1_y : &data->frame.s2_y;
     bool *synced = (s == 0) ? &data->s1_synced : &data->s2_synced;
     float (*matrix)[3] = (s == 0) ? data->rotation_matrix1 : data->rotation_matrix2;
-    const uint8_t hb = (uint8_t) (s * 2);
 
 #if IS_ENABLED(CONFIG_POINTER_2S_MIXER_ENSURE_SYNC)
     uint32_t *last_report = (s == 0) ? &data->last_sensor1_report : &data->last_sensor2_report;
@@ -559,16 +539,10 @@ static void on_sensor_event(struct zip_pointer_2s_mixer_data *data, const uint8_
         return;
     }
 
-    int16_t dx = *fx;
-    int16_t dy = *fy;
+    const int16_t dx = *fx;
+    const int16_t dy = *fy;
     *fx = 0;
     *fy = 0;
-
-    if (g_zrc_median_en) {
-        const uint8_t window = g_zrc_median_w;
-        dx = apply_median(data->median_buf[hb],     &data->median_head[hb],     &data->median_count[hb],     window, dx);
-        dy = apply_median(data->median_buf[hb + 1], &data->median_head[hb + 1], &data->median_count[hb + 1], window, dy);
-    }
 
     float rx, ry;
     apply_rotation(matrix, (float) dx, (float) dy, &rx, &ry);
@@ -749,10 +723,11 @@ static int data_init(const struct device *dev) {
     data->ema_translation = 0.0f;
     data->ema_initialized = false;
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
     data->sma_enabled = false;
+    data->sma_buffer = NULL;
     data->sma_window_size = CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE;
-#endif
+    data->sma_head_index = 0;
+    data->sma_count = 0;
 
     // going >1 means losing precision
     // acceptable for scroll but not movement
@@ -803,16 +778,6 @@ static int data_init(const struct device *dev) {
 
     k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    memset(data->sma_buffer, 0, sizeof(data->sma_buffer));
-    data->sma_head_index = 0;
-    data->sma_count = 0;
-    LOG_DBG("SMA buffers initialized: %d entries", CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE);
-#endif
-
-    memset(data->median_buf, 0, sizeof(data->median_buf));
-    memset(data->median_head, 0, sizeof(data->median_head));
-    memset(data->median_count, 0, sizeof(data->median_count));
     return 1;
 }
 
@@ -870,38 +835,23 @@ static struct zmk_input_processor_driver_api sy_driver_api = {
 };
 
 #if IS_ENABLED(CONFIG_SETTINGS)
+static void p2sm_save_one(const char *suffix, const void *value, const size_t len) {
+    char key[36];
+    snprintf(key, sizeof(key), "%s/%s", P2SM_SETTINGS_PREFIX, suffix);
+    const int err = settings_save_one(key, value, len);
+    if (err < 0) {
+        LOG_ERR("Failed to save settings %d", err);
+    }
+}
+
 static void p2sm_save_work_cb(struct k_work *work) {
     const struct zip_pointer_2s_mixer_data *data = g_dev->data;
     const float values[2] = { data->move_coef, data->twist_coef };
 
-    char key[36];
-    snprintf(key, sizeof(key), "%s/global", P2SM_SETTINGS_PREFIX);
-    int err = settings_save_one(key, values, sizeof(values));
-    if (err < 0) {
-        LOG_ERR("Failed to save settings %d", err);
-    } else {
-        LOG_DBG("Sensitivity settings saved");
-    }
-
-    snprintf(key, sizeof(key), "%s/twist_reversed", P2SM_SETTINGS_PREFIX);
-    err = settings_save_one(key, &data->twist_reversed, sizeof(data->twist_reversed));
-    if (err < 0) {
-        LOG_ERR("Failed to save settings %d", err);
-    }
-
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
-    snprintf(key, sizeof(key), "%s/sma_en", P2SM_SETTINGS_PREFIX);
-    err = settings_save_one(key, &data->sma_enabled, sizeof(data->sma_enabled));
-    if (err < 0) {
-        LOG_ERR("Failed to save settings %d", err);
-    }
-
-    snprintf(key, sizeof(key), "%s/sma_win", P2SM_SETTINGS_PREFIX);
-    err = settings_save_one(key, &data->sma_window_size, sizeof(data->sma_window_size));
-    if (err < 0) {
-        LOG_ERR("Failed to save settings %d", err);
-    }
-#endif
+    p2sm_save_one("global", values, sizeof(values));
+    p2sm_save_one("twist_reversed", &data->twist_reversed, sizeof(data->twist_reversed));
+    p2sm_save_one("sma_en", &data->sma_enabled, sizeof(data->sma_enabled));
+    p2sm_save_one("sma_win", &data->sma_window_size, sizeof(data->sma_window_size));
 }
 
 static void p2sm_save_config() {
@@ -976,7 +926,6 @@ void p2sm_toggle_twist() {
     data->twist_enabled = !data->twist_enabled;
 }
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
 bool p2sm_sma_enabled() {
     const struct zip_pointer_2s_mixer_data *data = p2sm_data();
     return data ? data->sma_enabled : false;
@@ -1002,7 +951,6 @@ void p2sm_set_sma_window(const uint8_t window_size) {
     data->sma_count = 0;
     P2SM_PERSIST();
 }
-#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
 // ReSharper disable once CppParameterMayBeConst
@@ -1019,9 +967,8 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
         return 0;
     }
 
-#if IS_ENABLED(CONFIG_POINTER_2S_MIXER_SMA_EN)
     if (settings_name_steq(name, "sma_en", NULL)) {
-        bool sma_en = true;
+        bool sma_en = false;
         const int rd = read_cb(cb_arg, &sma_en, sizeof(sma_en));
         if (rd == sizeof(bool)) {
             if (g_dev != NULL) {
@@ -1049,7 +996,6 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
 
         return 0;
     }
-#endif
 
     if (!settings_name_steq(name, "global", NULL)) {
         return 0;
@@ -1076,29 +1022,37 @@ SETTINGS_STATIC_HANDLER_DEFINE(p2sm_settings, P2SM_SETTINGS_PREFIX, NULL, p2sm_s
 #endif
 
 #if IS_ENABLED(CONFIG_ZMK_RUNTIME_CONFIG)
+static const struct zrc_param_def {
+    const char *key;
+    int32_t default_val, min_val, max_val;
+} zrc_param_defs[] = {
+    { "p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50 },
+    { "p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1 },
+    { "p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1 },
+    { "p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER), 0, 1 },
+    { "p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000 },
+    { "p2sm/twist_dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100 },
+    { "p2sm/twist_dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100 },
+    { "p2sm/twist_hyst_en",    IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN), 0, 1 },
+    { "p2sm/twist_hyst_thres", CONFIG_POINTER_2S_MIXER_TWIST_HYST_THRES, 1, 100 },
+    { "p2sm/twist_hyst_mul",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_MUL, 1, 100 },
+    { "p2sm/twist_hyst_div",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_DIV, 1, 100 },
+    { "p2sm/twist_thres",      CONFIG_POINTER_2S_MIXER_TWIST_THRES, 1, 100 },
+    { "p2sm/twist_ttl",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL, 0, 5000 },
+    { "p2sm/twist_deb",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE, 0, 5000 },
+    { "p2sm/fb_max_cont",      CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 5000 },
+    { "p2sm/fb_cooldown",      CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000 },
+    { "p2sm/fb_thres",         CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD, 0, 5000 },
+    { "p2sm/fb_dur",           CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION, 0, 5000 },
+    { "p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255 },
+    { "p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000 },
+};
+
 static int p2sm_register_runtime_params(void) {
-    zrc_register("p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50);
-    zrc_register("p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1);
-    zrc_register("p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1);
-    zrc_register("p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER), 0, 1);
-    zrc_register("p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000);
-    zrc_register("p2sm/twist_dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100);
-    zrc_register("p2sm/twist_dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100);
-    zrc_register("p2sm/twist_hyst_en",    IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN), 0, 1);
-    zrc_register("p2sm/twist_hyst_thres", CONFIG_POINTER_2S_MIXER_TWIST_HYST_THRES, 1, 100);
-    zrc_register("p2sm/twist_hyst_mul",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_MUL, 1, 100);
-    zrc_register("p2sm/twist_hyst_div",   CONFIG_POINTER_2S_MIXER_TWIST_HYST_DIV, 1, 100);
-    zrc_register("p2sm/twist_thres",      CONFIG_POINTER_2S_MIXER_TWIST_THRES, 1, 100);
-    zrc_register("p2sm/twist_ttl",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL, 0, 5000);
-    zrc_register("p2sm/twist_deb",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE, 0, 5000);
-    zrc_register("p2sm/fb_max_cont",      CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 5000);
-    zrc_register("p2sm/fb_cooldown",      CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000);
-    zrc_register("p2sm/fb_thres",         CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD, 0, 5000);
-    zrc_register("p2sm/fb_dur",           CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION, 0, 5000);
-    zrc_register("p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255);
-    zrc_register("p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000);
-    zrc_register("p2sm/median_en",        IS_ENABLED(CONFIG_POINTER_2S_MIXER_MEDIAN_EN), 0, 1);
-    zrc_register("p2sm/median_w",         CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE, 2, CONFIG_POINTER_2S_MIXER_MEDIAN_WINDOW_SIZE_MAX);
+    for (size_t i = 0; i < ARRAY_SIZE(zrc_param_defs); i++) {
+        const struct zrc_param_def *d = &zrc_param_defs[i];
+        zrc_register(d->key, d->default_val, d->min_val, d->max_val);
+    }
     return 0;
 }
 SYS_INIT(p2sm_register_runtime_params, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE);

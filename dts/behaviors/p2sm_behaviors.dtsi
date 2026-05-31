@@ -30,7 +30,7 @@
 		/omit-if-no-ref/ scrlsenstog: p2sm_sens_toggle {
 			compatible = "zmk,behavior-p2sm-sens";
 			#binding-cells = <2>;
-			feedback-duration = <250>;
+			feedback-duration = <65>;
 
 			// use with 3 steps (either INC or DEC) to toggle 25/40
 			// or with one step to switch between 25/30/35/40
@@ -53,7 +53,7 @@
 			compatible = "zmk,behavior-p2sm-twist-toggle";
 			#binding-cells = <0>;
 			display-name = "Toggle twist scroll";
-			feedback-duration = <200>;
+			feedback-duration = <65>;
 		};
 	};
 };
