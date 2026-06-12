@@ -15,6 +15,10 @@ config POINTER_2S_MIXER_LAZY_INIT
   help
     Make all the calculations not on boot but on fist data event (useful to see logs)
 
+config POINTER_2S_MIXER_FRAME_SYNC
+  bool "Use frame-end sync to batch sensor events"
+  default y
+
 config POINTER_2S_MIXER_ENSURE_SYNC
   bool "Ensure data from both sensors"
   default y

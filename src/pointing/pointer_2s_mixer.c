@@ -34,6 +34,7 @@ static bool     g_zrc_cache_initialized  = false;
 #endif
 
 /* pointer path */
+static bool     g_zrc_frame_sync       = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_FRAME_SYNC);
 static bool     g_zrc_scroll_dis_ptr   = (bool)     IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER);
 static uint32_t g_zrc_ptr_after_scroll = (uint32_t) CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION;
 static uint32_t g_zrc_steady_thres     = (uint32_t) CONFIG_POINTER_2S_MIXER_STEADY_THRES;
@@ -72,6 +73,7 @@ static const struct zrc_cache_entry {
     void *dst;
     uint8_t size;
 } zrc_cache_tbl[] = {
+    { "p2sm/frame_sync",       &g_zrc_frame_sync,       sizeof(g_zrc_frame_sync)       },
     { "p2sm/scroll_dis_ptr",   &g_zrc_scroll_dis_ptr,   sizeof(g_zrc_scroll_dis_ptr)   },
     { "p2sm/ptr_after_scroll", &g_zrc_ptr_after_scroll, sizeof(g_zrc_ptr_after_scroll) },
     { "p2sm/steady_thres",     &g_zrc_steady_thres,     sizeof(g_zrc_steady_thres)     },
@@ -556,7 +558,7 @@ static int sy_handle_event(const struct device *dev, struct input_event *event, 
     const struct zip_pointer_2s_mixer_config *config = dev->config;
     struct zip_pointer_2s_mixer_data *data = dev->data;
     const uint32_t now = (uint32_t) k_uptime_get();
-    const bool frame_end = event->sync;
+    const bool frame_end = g_zrc_frame_sync ? event->sync : true;
 
     if (unlikely(!data->initialized)) {
         if (!data_init(dev)) {
@@ -1028,6 +1030,7 @@ static const struct zrc_param_def {
 } zrc_param_defs[] = {
     { "p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50 },
     { "p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1 },
+    { "p2sm/frame_sync",       IS_ENABLED(CONFIG_POINTER_2S_MIXER_FRAME_SYNC), 0, 1 },
     { "p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1 },
     { "p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER), 0, 1 },
     { "p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000 },
