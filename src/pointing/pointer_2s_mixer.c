@@ -948,7 +948,7 @@ uint8_t p2sm_get_sma_window() {
 void p2sm_set_sma_window(const uint8_t window_size) {
     struct zip_pointer_2s_mixer_data *data = p2sm_data();
     if (!data) return;
-    data->sma_window_size = window_size;
+    data->sma_window_size = window_size > CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX ? CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX : window_size;
     data->sma_head_index = 0;
     data->sma_count = 0;
     P2SM_PERSIST();
@@ -990,7 +990,7 @@ static int p2sm_settings_load_cb(const char *name, size_t len, settings_read_cb 
         if (rd == sizeof(uint8_t)) {
             if (g_dev != NULL) {
                 struct zip_pointer_2s_mixer_data *data = g_dev->data;
-                data->sma_window_size = sma_win;
+                data->sma_window_size = sma_win > CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX ? CONFIG_POINTER_2S_MIXER_SMA_WINDOW_SIZE_MAX : sma_win;
             }
         } else {
             LOG_ERR("Failed to load sma_win");
