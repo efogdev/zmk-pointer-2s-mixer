@@ -143,7 +143,7 @@ struct zip_pointer_2s_mixer_config {
     // zero (origin) = down left bottom, not the ball center
     const uint8_t sensor1_pos[3], sensor2_pos[3];
     const uint8_t ball_radius; // up to 127
-
+    
     // feedback (i.e. vibration)
     // ToDo refactor to accept any behavior
     const struct gpio_dt_spec feedback_gpios;
@@ -779,7 +779,6 @@ static int data_init(const struct device *dev) {
 #endif
 
     k_work_init_delayable(&data->twist_filter_cleanup_work, twist_filter_cleanup_work_cb);
-
     return 1;
 }
 
@@ -1028,12 +1027,10 @@ static const struct zrc_param_def {
     const char *key;
     int32_t default_val, min_val, max_val;
 } zrc_param_defs[] = {
-    { "p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50 },
-    { "p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1 },
-    { "p2sm/frame_sync",       IS_ENABLED(CONFIG_POINTER_2S_MIXER_FRAME_SYNC), 0, 1 },
-    { "p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1 },
     { "p2sm/scroll_dis_ptr",   IS_ENABLED(CONFIG_POINTER_2S_MIXER_SCROLL_DISABLES_POINTER), 0, 1 },
     { "p2sm/ptr_after_scroll", CONFIG_POINTER_2S_MIXER_POINTER_AFTER_SCROLL_ACTIVATION, 0, 5000 },
+    { "p2sm/twist_global_en",  IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_EN), 0, 1 },
+    { "p2sm/ema_alpha",        CONFIG_POINTER_2S_MIXER_EMA_ALPHA, 1, 50 },
     { "p2sm/twist_dy_mag_mul", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_MUL, 1, 100 },
     { "p2sm/twist_dy_mag_div", CONFIG_POINTER_2S_MIXER_DELTA_Y_OVER_TRANS_MAG_DIV, 1, 100 },
     { "p2sm/twist_hyst_en",    IS_ENABLED(CONFIG_POINTER_2S_MIXER_TWIST_HYST_EN), 0, 1 },
@@ -1043,12 +1040,14 @@ static const struct zrc_param_def {
     { "p2sm/twist_thres",      CONFIG_POINTER_2S_MIXER_TWIST_THRES, 1, 100 },
     { "p2sm/twist_ttl",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_TTL, 0, 5000 },
     { "p2sm/twist_deb",        CONFIG_POINTER_2S_MIXER_TWIST_FILTER_DEBOUNCE, 0, 5000 },
+    { "p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255 },
+    { "p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000 },
+    { "p2sm/feedback_en",      IS_ENABLED(CONFIG_POINTER_2S_MIXER_FEEDBACK_EN), 0, 1 },
     { "p2sm/fb_max_cont",      CONFIG_POINTER_2S_MIXER_FEEDBACK_MAX_CONTINUOUS, 0, 5000 },
     { "p2sm/fb_cooldown",      CONFIG_POINTER_2S_MIXER_FEEDBACK_COOLDOWN, 0, 5000 },
     { "p2sm/fb_thres",         CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_THRESHOLD, 0, 5000 },
     { "p2sm/fb_dur",           CONFIG_POINTER_2S_MIXER_TWIST_FEEDBACK_DURATION, 0, 5000 },
-    { "p2sm/steady_thres",     CONFIG_POINTER_2S_MIXER_STEADY_THRES, 0, 255 },
-    { "p2sm/steady_cd",        CONFIG_POINTER_2S_MIXER_STEADY_COOLDOWN, 0, 5000 },
+    { "p2sm/frame_sync",       IS_ENABLED(CONFIG_POINTER_2S_MIXER_FRAME_SYNC), 0, 1 },
 };
 
 static int p2sm_register_runtime_params(void) {
